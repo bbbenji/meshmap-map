@@ -16,7 +16,10 @@
     </script>
 
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
     <title>Meshtastic Map</title>
     <meta name="title" content="Meshtastic Map" />
     <meta
@@ -26,7 +29,7 @@
     <link rel="icon" type="image/png" href="https://map.meshmap.pl/icon.png" />
 
     <!-- tailwind css -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
 
     <!-- leaflet map -->
     <link
@@ -117,11 +120,11 @@
       }
 
       .z-search {
-        z-index: 1000;
+        z-index: 1001;
       }
 
       .z-sidebar {
-        z-index: 1001;
+        z-index: 1002;
       }
     </style>
   </head>
@@ -130,11 +133,43 @@
       <div class="flex flex-col h-full w-full overflow-hidden">
         <div class="flex flex-col h-full">
           <!-- header -->
-          <div class="flex bg-white p-2 border-gray-300 border-b">
-            <div class="hidden sm:block my-auto mr-3">
+          <div class="flex bg-white p-2 border-gray-300 border-b h-16">
+            <!-- close mobile search button -->
+            <div v-if="isShowingMobileSearch" class="my-auto">
+              <a
+                @click="isShowingMobileSearch = false"
+                href="javascript:void(0)"
+                class="rounded-full"
+              >
+                <div class="bg-gray-100 hover:bg-gray-200 p-2 rounded-full">
+                  <svg
+                    class="w-6 h-6"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="1.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+                    />
+                  </svg>
+                </div>
+              </a>
+            </div>
+
+            <!-- icon -->
+            <div
+              v-if="!isShowingMobileSearch"
+              class="hidden sm:block my-auto mr-3"
+            >
               <img class="w-10 h-10 rounded" src="icon.png" />
             </div>
-            <div class="my-auto">
+
+            <!-- app info -->
+            <div v-if="!isShowingMobileSearch" class="my-auto leading-tight">
               <div class="font-bold">meshmap.pl</div>
               <div class="text-sm">
                 <div class="hidden sm:inline-block space-x-1">
@@ -151,7 +186,12 @@
                 </div>
               </div>
             </div>
-            <div class="mx-3 flex-1 relative hidden lg:block">
+
+            <!-- search bar -->
+            <div
+              class="mx-3 flex-1 relative"
+              :class="{ 'hidden lg:block': !isShowingMobileSearch }"
+            >
               <input
                 v-model="searchText"
                 type="text"
@@ -164,8 +204,7 @@
               >
                 <template v-if="searchedNodes.length > 0">
                   <div
-                    @click="searchText = ''"
-                    :onclick="`goToNode(${node.node_id})`"
+                    @click="onSearchResultNodeClick(node)"
                     class="p-2 hover:bg-gray-100 cursor-pointer"
                     v-for="node of searchedNodes"
                   >
@@ -188,7 +227,9 @@
                 </template>
               </div>
             </div>
+            <!-- header action buttons -->
             <div
+              v-if="!isShowingMobileSearch"
               class="flex my-auto ml-auto mr-0 sm:mr-2 space-x-1 sm:space-x-2"
             >
               <!-- <a
@@ -212,9 +253,9 @@
                 </div>
               </a> -->
               <a
-                href="#"
+                @click="isShowingMobileSearch = true"
+                href="javascript:void(0)"
                 class="tooltip rounded-full block lg:hidden"
-                onclick="searchNodes()"
               >
                 <div
                   id="search-button"
@@ -1347,35 +1388,65 @@
                 </div>
 
                 <div class="overflow-y-auto divide-y divide-gray-200">
+                  <!-- configNodesMaxAgeInSeconds -->
+                  <div class="p-2">
+                    <label class="block text-sm font-medium text-gray-900"
+                      >Nodes Max Age</label
+                    >
+                    <div class="text-xs text-gray-600 mb-2">
+                      Nodes not updated within this time are hidden. Reload to
+                      update map.
+                    </div>
+                    <select
+                      v-model="configNodesMaxAgeInSeconds"
+                      class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+                    >
+                      <option :value="null">Show All</option>
+                      <option value="900">15 minutes</option>
+                      <option value="1800">30 minutes</option>
+                      <option value="3600">1 hour</option>
+                      <option value="10800">3 hours</option>
+                      <option value="21600">6 hours</option>
+                      <option value="43200">12 hours</option>
+                      <option value="86400">24 hours</option>
+                      <option value="172800">2 days</option>
+                      <option value="259200">3 days</option>
+                      <option value="345600">4 days</option>
+                      <option value="432000">5 days</option>
+                      <option value="518400">6 days</option>
+                      <option value="604800">7 days</option>
+                    </select>
+                  </div>
+
                   <!-- configNeighboursMaxDistanceInMeters -->
                   <div class="p-2">
-                    <label class="block mb-2 text-sm font-medium text-gray-900"
+                    <label class="block text-sm font-medium text-gray-900"
                       >Neighbours Max Distance (meters)</label
                     >
+                    <div class="text-xs text-gray-600 mb-2">
+                      Neighbours further than this are hidden. Reload to update
+                      map.
+                    </div>
                     <input
                       type="number"
                       v-model="configNeighboursMaxDistanceInMeters"
                       class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
                     />
-                    <div class="text-xs text-gray-600">
-                      Neighbours further than this are hidden. Reload to update
-                      map.
-                    </div>
                   </div>
 
                   <!-- configZoomLevelGoToNode -->
                   <div class="p-2">
-                    <label class="block mb-2 text-sm font-medium text-gray-900"
+                    <label class="block text-sm font-medium text-gray-900"
                       >Zoom Level (go to node)</label
                     >
+                    <div class="text-xs text-gray-600 mb-2">
+                      How far to zoom map when navigating to a node.
+                    </div>
                     <input
                       type="number"
                       v-model="configZoomLevelGoToNode"
                       class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
                     />
-                    <div class="text-xs text-gray-600">
-                      How far to zoom map when navigating to a node.
-                    </div>
                   </div>
                 </div>
               </div>
@@ -1386,6 +1457,19 @@
     </div>
 
     <script>
+      function getConfigNodesMaxAgeInSeconds() {
+        const value = localStorage.getItem("config_nodes_max_age_in_seconds");
+        return value != null ? parseInt(value) : null;
+      }
+
+      function setConfigNodesMaxAgeInSeconds(value) {
+        if (value != null) {
+          return localStorage.setItem("config_nodes_max_age_in_seconds", value);
+        } else {
+          return localStorage.removeItem("config_nodes_max_age_in_seconds");
+        }
+      }
+
       function getConfigNeighboursMaxDistanceInMeters() {
         const value = localStorage.getItem(
           "config_neighbours_max_distance_in_meters"
@@ -1415,6 +1499,7 @@
       Vue.createApp({
         data() {
           return {
+            configNodesMaxAgeInSeconds: window.getConfigNodesMaxAgeInSeconds(),
             configNeighboursMaxDistanceInMeters:
               window.getConfigNeighboursMaxDistanceInMeters(),
             configZoomLevelGoToNode: window.getConfigZoomLevelGoToNode(),
@@ -1422,6 +1507,7 @@
             isShowingHardwareModels: false,
             hardwareModelStats: null,
 
+            isShowingMobileSearch: false,
             isShowingSettings: false,
 
             nodes: [],
@@ -1444,6 +1530,7 @@
           // handle map click callback from outside of vue
           window._onMapClick = () => {
             this.searchText = "";
+            this.isShowingMobileSearch = false;
           };
 
           // handle node callback from outside of vue
@@ -1793,6 +1880,16 @@
           findNodeById: function (id) {
             return window.findNodeById(id);
           },
+          onSearchResultNodeClick: function (node) {
+            // clear search
+            this.searchText = "";
+
+            // hide search
+            this.isShowingMobileSearch = false;
+
+            // go to node
+            window.goToNode(node.node_id);
+          },
         },
         computed: {
           searchedNodes() {
@@ -1826,6 +1923,11 @@
           },
         },
         watch: {
+          configNodesMaxAgeInSeconds() {
+            window.setConfigNodesMaxAgeInSeconds(
+              this.configNodesMaxAgeInSeconds
+            );
+          },
           configNeighboursMaxDistanceInMeters() {
             window.setConfigNeighboursMaxDistanceInMeters(
               this.configNeighboursMaxDistanceInMeters
@@ -1937,59 +2039,6 @@
         }
 
         return true;
-      }
-
-      function searchNodes() {
-        // ask user for input
-        var search = prompt("Find by Node ID");
-        if (search === null || search === "") {
-          return;
-        }
-
-        // find node
-        var nodeId = findNodeId(search);
-        if (!nodeId) {
-          alert("Could not find node: " + search);
-          return;
-        }
-
-        goToNode(nodeId);
-      }
-
-      function findNodeId(search) {
-        // make sure search is a string
-        search = search.toString();
-
-        // find node id from existing marker
-        var nodeMarker = findNodeMarkerById(search);
-        if (nodeMarker) {
-          return nodeMarker.options.tagName;
-        }
-
-        // otherwise search nodes on map
-        for (var node of nodes) {
-          // find by node_id
-          if (node.node_id.toString().toLowerCase() === search.toLowerCase()) {
-            return node.node_id;
-          }
-
-          // find by node_id_hex
-          if (
-            node.node_id_hex.toString().toLowerCase() === search.toLowerCase()
-          ) {
-            return node.node_id;
-          }
-
-          // find by node_id_hex (without "!")
-          if (
-            node.node_id_hex.toString().toLowerCase().replaceAll("!", "") ===
-            search.toLowerCase()
-          ) {
-            return node.node_id;
-          }
-        }
-
-        return null;
       }
 
       function findNodeById(id) {
@@ -2125,6 +2174,16 @@
 
         // add nodes
         for (var node of updatedNodes) {
+          // skip nodes older than configured node max age
+          const now = moment();
+          const configNodesMaxAgeInSeconds = getConfigNodesMaxAgeInSeconds();
+          if (configNodesMaxAgeInSeconds) {
+            const lastUpdatedAgeInMillis = now.diff(moment(node.updated_at));
+            if (lastUpdatedAgeInMillis > configNodesMaxAgeInSeconds * 1000) {
+              continue;
+            }
+          }
+
           // skip nodes without position
           if (!node.latitude || !node.longitude) {
             continue;
