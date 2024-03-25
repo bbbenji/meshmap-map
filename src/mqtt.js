@@ -489,4 +489,3 @@ client.on("message", async (topic, message) => {
     // ignore errors
   }
 });
-

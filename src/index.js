@@ -1,5 +1,5 @@
-const path = require('path');
-const express = require('express');
+const path = require("path");
+const express = require("express");
 const protobufjs = require("protobufjs");
 
 // create prisma db client
@@ -7,314 +7,307 @@ const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
 // return big ints as string when using JSON.stringify
-BigInt.prototype.toJSON = function() {
-    return this.toString();
-}
+BigInt.prototype.toJSON = function () {
+  return this.toString();
+};
 
 // load protobufs
 const root = new protobufjs.Root();
 root.resolvePath = (origin, target) => path.join(__dirname, "protos", target);
-root.loadSync('meshtastic/mqtt.proto');
+root.loadSync("meshtastic/mqtt.proto");
 const HardwareModel = root.lookupEnum("HardwareModel");
 const Role = root.lookupEnum("Config.DeviceConfig.Role");
 
 // appends extra info for node objects returned from api
 function formatNodeInfo(node) {
-    return {
-        ...node,
-        node_id_hex: "!" + node.node_id.toString(16),
-        hardware_model_name: HardwareModel.valuesById[node.hardware_model] ?? "UNKNOWN",
-        role_name: Role.valuesById[node.role] ?? "UNKNOWN",
-    };
+  return {
+    ...node,
+    node_id_hex: "!" + node.node_id.toString(16),
+    hardware_model_name:
+      HardwareModel.valuesById[node.hardware_model] ?? "UNKNOWN",
+    role_name: Role.valuesById[node.role] ?? "UNKNOWN",
+  };
 }
 
 const app = express();
 
 // serve files inside the public folder from /
-app.use('/', express.static(path.join(__dirname, 'public')));
+app.use("/", express.static(path.join(__dirname, "public")));
 
-app.get('/', async (req, res) => {
-    res.sendFile(path.join(__dirname, 'public/index.html'));
+app.get("/", async (req, res) => {
+  res.sendFile(path.join(__dirname, "public/index.html"));
 });
 
-app.get('/api', async (req, res) => {
+app.get("/api", async (req, res) => {
+  const links = [
+    {
+      path: "/api",
+      description: "This page",
+    },
+    {
+      path: "/api/v1/nodes",
+      description: "Meshtastic nodes in JSON format.",
+    },
+    {
+      path: "/api/v1/stats/hardware-models",
+      description: "Database statistics about hardware models in JSON format.",
+    },
+    {
+      path: "/api/v1/waypoints",
+      description: "Meshtastic waypoints in JSON format.",
+    },
+  ];
 
-    const links = [
-        {
-            "path": "/api",
-            "description": "This page",
+  const html = links
+    .map((link) => {
+      return `<li><a href="${link.path}">${link.path}</a> - ${link.description}</li>`;
+    })
+    .join("");
+
+  res.send(html);
+});
+
+app.get("/api/v1/nodes", async (req, res) => {
+  try {
+    // get nodes from db
+    const nodes = await prisma.node.findMany();
+
+    const nodesWithInfo = [];
+    for (const node of nodes) {
+      nodesWithInfo.push(formatNodeInfo(node));
+    }
+
+    res.json({
+      nodes: nodesWithInfo,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
+app.get("/api/v1/nodes/:nodeId", async (req, res) => {
+  try {
+    const nodeId = parseInt(req.params.nodeId);
+
+    // find node
+    const node = await prisma.node.findFirst({
+      where: {
+        node_id: nodeId,
+      },
+    });
+
+    // make sure node exists
+    if (!node) {
+      res.status(404).json({
+        message: "Not Found",
+      });
+      return;
+    }
+
+    res.json({
+      node: formatNodeInfo(node),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
+app.get("/api/v1/nodes/:nodeId/device-metrics", async (req, res) => {
+  try {
+    const nodeId = parseInt(req.params.nodeId);
+    const count = req.query.count ? parseInt(req.query.count) : undefined;
+
+    // find node
+    const node = await prisma.node.findFirst({
+      where: {
+        node_id: nodeId,
+      },
+    });
+
+    // make sure node exists
+    if (!node) {
+      res.status(404).json({
+        message: "Not Found",
+      });
+      return;
+    }
+
+    // get latest device metrics
+    const deviceMetrics = await prisma.deviceMetric.findMany({
+      where: {
+        node_id: node.node_id,
+      },
+      orderBy: {
+        id: "desc",
+      },
+      take: count,
+    });
+
+    res.json({
+      device_metrics: deviceMetrics,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
+app.get("/api/v1/nodes/:nodeId/mqtt-metrics", async (req, res) => {
+  try {
+    const nodeId = parseInt(req.params.nodeId);
+
+    // find node
+    const node = await prisma.node.findFirst({
+      where: {
+        node_id: nodeId,
+      },
+    });
+
+    // make sure node exists
+    if (!node) {
+      res.status(404).json({
+        message: "Not Found",
+      });
+      return;
+    }
+
+    // get mqtt topics published to by this node
+    const queryResult =
+      await prisma.$queryRaw`select mqtt_topic, count(*) as packet_count, max(created_at) as last_packet_at from service_envelopes where gateway_id = ${nodeId} group by mqtt_topic order by packet_count desc;`;
+
+    res.json({
+      mqtt_metrics: queryResult,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
+app.get("/api/v1/nodes/:nodeId/traceroutes", async (req, res) => {
+  try {
+    const nodeId = parseInt(req.params.nodeId);
+    const count = req.query.count ? parseInt(req.query.count) : 10; // can't set to null because of $queryRaw
+
+    // find node
+    const node = await prisma.node.findFirst({
+      where: {
+        node_id: nodeId,
+      },
+    });
+
+    // make sure node exists
+    if (!node) {
+      res.status(404).json({
+        message: "Not Found",
+      });
+      return;
+    }
+
+    // get latest traceroutes
+    const traceroutes =
+      await prisma.$queryRaw`SELECT * FROM traceroutes WHERE node_id = ${node.node_id} and JSON_LENGTH(route) > 0 and gateway_id is not null order by id desc limit ${count}`;
+
+    res.json({
+      traceroutes: traceroutes,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
+app.get("/api/v1/stats/hardware-models", async (req, res) => {
+  try {
+    // get nodes from db
+    const results = await prisma.node.groupBy({
+      by: ["hardware_model"],
+      orderBy: {
+        _count: {
+          hardware_model: "desc",
         },
-        {
-            "path": "/api/v1/nodes",
-            "description": "Meshtastic nodes in JSON format.",
+      },
+      _count: {
+        hardware_model: true,
+      },
+    });
+
+    const hardwareModelStats = results.map((result) => {
+      return {
+        count: result._count.hardware_model,
+        hardware_model: result.hardware_model,
+        hardware_model_name:
+          HardwareModel.valuesById[result.hardware_model] ?? "UNKNOWN",
+      };
+    });
+
+    res.json({
+      hardware_model_stats: hardwareModelStats,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
+app.get("/api/v1/waypoints", async (req, res) => {
+  try {
+    // get waypoints from db that have not expired yet
+    const waypoints = await prisma.waypoint.findMany({
+      where: {
+        expire: {
+          gte: Math.floor(Date.now() / 1000), // now in seconds
         },
-        {
-            "path": "/api/v1/stats/hardware-models",
-            "description": "Database statistics about hardware models in JSON format.",
-        },
-        {
-            "path": "/api/v1/waypoints",
-            "description": "Meshtastic waypoints in JSON format.",
-        },
-    ];
+      },
+      orderBy: {
+        id: "desc",
+      },
+    });
 
-    const html = links.map((link) => {
-        return `<li><a href="${link.path}">${link.path}</a> - ${link.description}</li>`;
-    }).join("");
+    // ensure we only have the latest unique waypoints
+    // since ordered by newest first, older entries will be ignored
+    const uniqueWaypoints = [];
+    for (const waypoint of waypoints) {
+      // skip if we already have a newer entry for this waypoint
+      if (
+        uniqueWaypoints.find(
+          (w) =>
+            w.from === waypoint.from && w.waypoint_id === waypoint.waypoint_id
+        )
+      ) {
+        continue;
+      }
 
-    res.send(html);
-
-});
-
-app.get('/api/v1/nodes', async (req, res) => {
-    try {
-
-        // get nodes from db
-        const nodes = await prisma.node.findMany();
-
-        const nodesWithInfo = [];
-        for(const node of nodes){
-            nodesWithInfo.push(formatNodeInfo(node));
-        }
-
-        res.json({
-            nodes: nodesWithInfo,
-        });
-
-    } catch(err) {
-        console.error(err);
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
+      // first time seeing this waypoint, add to unique list
+      uniqueWaypoints.push(waypoint);
     }
-});
 
-app.get('/api/v1/nodes/:nodeId', async (req, res) => {
-    try {
-
-        const nodeId = parseInt(req.params.nodeId);
-
-        // find node
-        const node = await prisma.node.findFirst({
-            where: {
-                node_id: nodeId,
-            },
-        });
-
-        // make sure node exists
-        if(!node){
-            res.status(404).json({
-                message: "Not Found",
-            });
-            return;
-        }
-
-        res.json({
-            node: formatNodeInfo(node),
-        });
-
-    } catch(err) {
-        console.error(err);
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
-    }
-});
-
-app.get('/api/v1/nodes/:nodeId/device-metrics', async (req, res) => {
-    try {
-
-        const nodeId = parseInt(req.params.nodeId);
-        const count = req.query.count ? parseInt(req.query.count) : undefined;
-
-        // find node
-        const node = await prisma.node.findFirst({
-           where: {
-               node_id: nodeId,
-           },
-        });
-
-        // make sure node exists
-        if(!node){
-            res.status(404).json({
-                message: "Not Found",
-            });
-            return;
-        }
-
-        // get latest device metrics
-        const deviceMetrics = await prisma.deviceMetric.findMany({
-            where: {
-                node_id: node.node_id,
-            },
-            orderBy: {
-                id: 'desc',
-            },
-            take: count,
-        });
-
-        res.json({
-            device_metrics: deviceMetrics,
-        });
-
-    } catch(err) {
-        console.error(err);
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
-    }
-});
-
-app.get('/api/v1/nodes/:nodeId/mqtt-metrics', async (req, res) => {
-    try {
-
-        const nodeId = parseInt(req.params.nodeId);
-
-        // find node
-        const node = await prisma.node.findFirst({
-            where: {
-                node_id: nodeId,
-            },
-        });
-
-        // make sure node exists
-        if(!node){
-            res.status(404).json({
-                message: "Not Found",
-            });
-            return;
-        }
-
-        // get mqtt topics published to by this node
-        const queryResult = await prisma.$queryRaw`select mqtt_topic, count(*) as packet_count, max(created_at) as last_packet_at from service_envelopes where gateway_id = ${nodeId} group by mqtt_topic order by packet_count desc;`;
-
-        res.json({
-            mqtt_metrics: queryResult,
-        });
-
-    } catch(err) {
-        console.error(err);
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
-    }
-});
-
-app.get('/api/v1/nodes/:nodeId/traceroutes', async (req, res) => {
-    try {
-
-        const nodeId = parseInt(req.params.nodeId);
-        const count = req.query.count ? parseInt(req.query.count) : 10; // can't set to null because of $queryRaw
-
-        // find node
-        const node = await prisma.node.findFirst({
-            where: {
-                node_id: nodeId,
-            },
-        });
-
-        // make sure node exists
-        if(!node){
-            res.status(404).json({
-                message: "Not Found",
-            });
-            return;
-        }
-
-        // get latest traceroutes
-        const traceroutes = await prisma.$queryRaw`SELECT * FROM traceroutes WHERE node_id = ${node.node_id} and JSON_LENGTH(route) > 0 and gateway_id is not null order by id desc limit ${count}`;
-
-        res.json({
-            traceroutes: traceroutes,
-        });
-
-    } catch(err) {
-        console.error(err);
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
-    }
-});
-
-app.get('/api/v1/stats/hardware-models', async (req, res) => {
-    try {
-
-        // get nodes from db
-        const results = await prisma.node.groupBy({
-            by: ['hardware_model'],
-            orderBy: {
-                _count: {
-                    hardware_model: 'desc',
-                },
-            },
-            _count: {
-                hardware_model: true,
-            },
-        });
-
-        const hardwareModelStats = results.map((result) => {
-           return {
-               count: result._count.hardware_model,
-               hardware_model: result.hardware_model,
-               hardware_model_name: HardwareModel.valuesById[result.hardware_model] ?? "UNKNOWN",
-           };
-        });
-
-        res.json({
-            hardware_model_stats: hardwareModelStats,
-        });
-
-    } catch(err) {
-        console.error(err);
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
-    }
-});
-
-app.get('/api/v1/waypoints', async (req, res) => {
-    try {
-
-        // get waypoints from db that have not expired yet
-        const waypoints = await prisma.waypoint.findMany({
-            where: {
-                expire: {
-                    gte: Math.floor(Date.now() / 1000), // now in seconds
-                },
-            },
-            orderBy: {
-                id: 'desc',
-            },
-        });
-
-        // ensure we only have the latest unique waypoints
-        // since ordered by newest first, older entries will be ignored
-        const uniqueWaypoints = [];
-        for(const waypoint of waypoints){
-
-            // skip if we already have a newer entry for this waypoint
-            if(uniqueWaypoints.find((w) => w.from === waypoint.from && w.waypoint_id === waypoint.waypoint_id)){
-                continue;
-            }
-
-            // first time seeing this waypoint, add to unique list
-            uniqueWaypoints.push(waypoint);
-
-        }
-
-        res.json({
-            waypoints: uniqueWaypoints,
-        });
-
-    } catch(err) {
-        res.status(500).json({
-            message: "Something went wrong, try again later.",
-        });
-    }
+    res.json({
+      waypoints: uniqueWaypoints,
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
 });
 
 // start express server
 const listener = app.listen(8080, () => {
-    const port = listener.address().port;
-    console.log(`Server running at http://127.0.0.1:${port}`);
+  const port = listener.address().port;
+  console.log(`Server running at http://127.0.0.1:${port}`);
 });
