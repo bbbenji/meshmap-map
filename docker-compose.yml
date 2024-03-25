@@ -1,0 +1,47 @@
+version: '3.1'
+
+services:
+
+  mariadb:
+    image: mariadb:10.5
+    container_name: mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: PASSWORD
+    ports:
+      - "3306:3306"
+
+  meshmap-map:
+    container_name: meshmap-map
+    build:
+      context: ./meshmap-map
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./meshmap-map:/app
+    restart: always
+    depends_on:
+      - mariadb
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"                         # HTTP traffic
+      - "443:443"                       # HTTPS traffic
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy/data:/data
+      - ./caddy/config:/config
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: always
+    command: -H unix:///var/run/docker.sock
+    ports:
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer/data:/data
