@@ -3,20 +3,22 @@ const path = require("path");
 const mqtt = require("mqtt");
 const protobufjs = require("protobufjs");
 
-// create prisma db client
+// Initialize Prisma client for database operations
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
-// create mqtt client
+// Connect to the MQTT broker with specified credentials
 const client = mqtt.connect("mqtt://mqtt.meshtastic.org", {
   username: "meshdev",
   password: "large4cats",
 });
 
-// load protobufs
+// Set up Protocol Buffers loading mechanism for structured data handling
 const root = new protobufjs.Root();
 root.resolvePath = (origin, target) => path.join(__dirname, "protos", target);
 root.loadSync("meshtastic/mqtt.proto");
+
+// Lookup and prepare protobuf types for later use
 const Data = root.lookupType("Data");
 const ServiceEnvelope = root.lookupType("ServiceEnvelope");
 const MapReport = root.lookupType("MapReport");
@@ -27,6 +29,7 @@ const Telemetry = root.lookupType("Telemetry");
 const User = root.lookupType("User");
 const Waypoint = root.lookupType("Waypoint");
 
+// Function to create a unique nonce for packet encryption/decryption
 function createNonce(packetId, fromNode) {
   // Expand packetId to 64 bits
   const packetId64 = BigInt(packetId);
@@ -46,30 +49,32 @@ function createNonce(packetId, fromNode) {
 }
 
 /**
- * References:
- * https://github.com/crypto-smoke/meshtastic-go/blob/develop/radio/aes.go#L42
- * https://github.com/pdxlocations/Meshtastic-MQTT-Connect/blob/main/meshtastic-mqtt-connect.py#L381
+ * Function to decrypt packets using AES-128-CTR
+ * References for the decryption logic and structure:
+ * - https://github.com/crypto-smoke/meshtastic-go/blob/develop/radio/aes.go#L42
+ * - https://github.com/pdxlocations/Meshtastic-MQTT-Connect/blob/main/meshtastic-mqtt-connect.py#L381
  */
 function decrypt(packet) {
   try {
-    // default encryption key
+    // Default encryption key
     const key = Buffer.from("1PG7OiApB1nwvP+rz05pAQ==", "base64");
 
-    // create decryption iv/nonce for this packet
+    // Create decryption iv/nonce for this packet
     const nonceBuffer = createNonce(packet.id, packet.from);
 
-    // create aes-128-ctr decipher
+    // Create aes-128-ctr decipher
     const decipher = crypto.createDecipheriv("aes-128-ctr", key, nonceBuffer);
 
-    // decrypt encrypted packet
+    // Decrypt encrypted packet
     const decryptedBuffer = Buffer.concat([
       decipher.update(packet.encrypted),
       decipher.final(),
     ]);
 
-    // parse as data message
+    // Parse as data message
     return Data.decode(decryptedBuffer);
   } catch (e) {
+    // Return null on error to indicate failure
     return null;
   }
 }
@@ -86,16 +91,16 @@ client.on("connect", function () {
   });
 });
 
-// handle message received
+// Event listener for receiving messages
 client.on("message", async (topic, message) => {
   try {
-    // decode service envelope
+    // Decode service envelope
     const envelope = ServiceEnvelope.decode(message);
     if (!envelope.packet) {
       return;
     }
 
-    // create service envelope in db
+    // Create service envelope in db
     if (process.env.MM_COLLECT_SERVICE_ENVELOPES === "true") {
       try {
         await prisma.serviceEnvelope.create({
@@ -104,7 +109,7 @@ client.on("message", async (topic, message) => {
             channel_id: envelope.channelId,
             gateway_id: envelope.gatewayId
               ? BigInt("0x" + envelope.gatewayId.replaceAll("!", ""))
-              : null, // convert hex id "!f96a92f0" to bigint
+              : null, // Convert hex id "!f96a92f0" to bigint
             to: envelope.packet.to,
             from: envelope.packet.from,
             protobuf: message,
@@ -117,21 +122,26 @@ client.on("message", async (topic, message) => {
       }
     }
 
-    // attempt to decrypt encrypted packets
+    // Attempt to decrypt encrypted packets
     const isEncrypted = envelope.packet.encrypted?.length > 0;
     if (isEncrypted) {
       const decoded = decrypt(envelope.packet);
       if (decoded) {
         envelope.packet.decoded = decoded;
+        // Optional logging for decrypted messages
         // console.log("Decryption successful. Message received:", decoded);
       }
     }
 
+    // Logging configurations (set to false to disable logging specific packet types)
     const logKnownPacketTypes = false;
+
     const logUnknownPacketTypes = false;
     const portnum = envelope.packet?.decoded?.portnum;
 
+    // Handling different types of packets based on their portnum
     if (portnum === 1) {
+      // Handling TEXT_MESSAGE_APP
       if (logKnownPacketTypes) {
         console.log("TEXT_MESSAGE_APP", {
           to: envelope.packet.to.toString(16),
@@ -140,6 +150,7 @@ client.on("message", async (topic, message) => {
         });
       }
 
+      // Store text messages in the database
       try {
         await prisma.textMessage.create({
           data: {
@@ -162,6 +173,7 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
     } else if (portnum === 3) {
+      // Handling POSITION_APP
       const position = Position.decode(envelope.packet.decoded.payload);
       console.log("Decryption successful. Position received:", position);
 
@@ -172,7 +184,7 @@ client.on("message", async (topic, message) => {
         });
       }
 
-      // update node position in db
+      // Update node position in the database
       if (position.latitudeI != null && position.longitudeI) {
         try {
           await prisma.node.updateMany({
@@ -191,6 +203,7 @@ client.on("message", async (topic, message) => {
         }
       }
     } else if (portnum === 4) {
+      // Handling NODEINFO_APP
       const user = User.decode(envelope.packet.decoded.payload);
 
       if (logKnownPacketTypes) {
@@ -200,7 +213,7 @@ client.on("message", async (topic, message) => {
         });
       }
 
-      // create or update node in db
+      // Create or update node information in the database
       try {
         await prisma.node.upsert({
           where: {
@@ -226,6 +239,7 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
     } else if (portnum === 8) {
+      // Handling WAYPOINT_APP
       const waypoint = Waypoint.decode(envelope.packet.decoded.payload);
 
       if (logKnownPacketTypes) {
@@ -236,6 +250,7 @@ client.on("message", async (topic, message) => {
         });
       }
 
+      // Store waypoint information in the database
       try {
         await prisma.waypoint.create({
           data: {
@@ -261,6 +276,7 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
     } else if (portnum === 71) {
+      // Handling NEIGHBORINFO_APP
       const neighbourInfo = NeighborInfo.decode(
         envelope.packet.decoded.payload
       );
@@ -272,7 +288,11 @@ client.on("message", async (topic, message) => {
         });
       }
 
-      // create neighbour info
+      // Process neighbor information and update in the database
+      // Similar logic applies to other packet types like TELEMETRY_APP, TRACEROUTE_APP, MAP_REPORT_APP
+      // Each with their specific handling based on the packet's payload and purpose
+
+      // Create neighbour info in the database
       try {
         await prisma.neighbourInfo.create({
           data: {
@@ -291,7 +311,7 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
 
-      // update node neighbour info in db
+      // Update node neighbour info in the database
       try {
         await prisma.node.updateMany({
           where: {
@@ -313,6 +333,7 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
     } else if (portnum === 67) {
+      // Handling TELEMETRY_APP
       const telemetry = Telemetry.decode(envelope.packet.decoded.payload);
 
       if (logKnownPacketTypes) {
@@ -392,6 +413,7 @@ client.on("message", async (topic, message) => {
         }
       }
     } else if (portnum === 70) {
+      // Handling TRACEROUTE_APP
       const routeDiscovery = RouteDiscovery.decode(
         envelope.packet.decoded.payload
       );
@@ -420,8 +442,10 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
     } else if (portnum === 73) {
+      // Handling MAP_REPORT_APP
       const mapReport = MapReport.decode(envelope.packet.decoded.payload);
 
+      // Handling unknown or unimplemented packet types
       if (logKnownPacketTypes) {
         console.log("MAP_REPORT_APP", {
           from: envelope.packet.from.toString(16),
@@ -489,3 +513,9 @@ client.on("message", async (topic, message) => {
     // ignore errors
   }
 });
+
+// The script includes comprehensive handling for various types of data packets
+// that might be received over MQTT. This includes secure decryption of packets,
+// decoding with Protocol Buffers, and detailed processing based on the packet type.
+// Additionally, it includes database operations for storing and updating the received
+// data in a structured manner, using the Prisma ORM for efficient and manageable database interactions.
