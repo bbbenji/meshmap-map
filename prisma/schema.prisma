@@ -14,13 +14,20 @@ datasource db {
 }
 
 model Node {
-  id             BigInt  @id @default(autoincrement())
-  node_id        BigInt  @unique
+  id             BigInt   @id @default(autoincrement())
+  node_id        BigInt   @unique
   long_name      String
   short_name     String
   hardware_model Int
-  is_licensed    Boolean
   role           Int
+  is_licensed    Boolean?
+
+  firmware_version       String?
+  region                 Int?
+  modem_preset           Int?
+  has_default_channel    Boolean?
+  position_precision     Int?
+  num_online_local_nodes Int?
 
   latitude            Int?
   longitude           Int?
@@ -35,6 +42,9 @@ model Node {
   neighbour_broadcast_interval_secs Int?
   neighbours                        Json?
   neighbours_updated_at             DateTime?
+
+  mqtt_connection_state            String?
+  mqtt_connection_state_updated_at DateTime?
 
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt

@@ -28,6 +28,15 @@
     />
     <link rel="icon" type="image/png" href="https://map.meshmap.pl/icon.png" />
 
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://map.meshmap.pl" />
+    <meta property="og:title" content="Meshtastic Map" />
+    <meta
+      property="og:description"
+      content="An interactive map of all Meshtastic nodes."
+    />
+
     <!-- tailwind css -->
     <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
 
@@ -43,6 +52,9 @@
       integrity="sha256-WBkoXOwTeyKclOHuWtc+i2uENFpDZ9YPdf5Hf+D7ewM="
       crossorigin=""
     ></script>
+    <script src="plugins/leaflet.polylineoffset.js"></script>
+    <script src="plugins/leaflet.geometryutil.js"></script>
+    <script src="plugins/leaflet-arrowheads.js"></script>
     <script src="plugins/leaflet.markercluster/leaflet.markercluster.js"></script>
     <link
       rel="stylesheet"
@@ -64,8 +76,25 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <style>
-      .icon-online {
+      /* used to prevent ui flicker before vuejs loads */
+      [v-cloak] {
+        display: none;
+      }
+
+      .icon-mqtt-connected {
         background-color: #16a34a;
+        border-radius: 25px;
+        border: 1px solid white;
+      }
+
+      .icon-mqtt-disconnected {
+        background-color: #2563eb;
+        border-radius: 25px;
+        border: 1px solid white;
+      }
+
+      .icon-offline {
+        background-color: #dc2626;
         border-radius: 25px;
         border: 1px solid white;
       }
@@ -129,7 +158,7 @@
     </style>
   </head>
   <body class="h-full bg-gray-200">
-    <div id="app">
+    <div id="app" v-cloak>
       <div class="flex flex-col h-full w-full overflow-hidden">
         <div class="flex flex-col h-full">
           <!-- header -->
@@ -227,31 +256,57 @@
                 </template>
               </div>
             </div>
+
             <!-- header action buttons -->
             <div
               v-if="!isShowingMobileSearch"
               class="flex my-auto ml-auto mr-0 sm:mr-2 space-x-1 sm:space-x-2"
             >
               <!-- <a
-                href="https://github.com/bbbenji/meshmap-map"
-                class="tooltip rounded-full hidden lg:block"
+              href="https://github.com/bbbenji/meshmap-map"
+              class="tooltip rounded-full hidden lg:block"
+            >
+              <div class="bg-gray-100 hover:bg-gray-200 p-2 rounded-full">
+                <svg
+                  class="w-6 h-6"
+                  role="img"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+                  />
+                </svg>
+              </div>
+              <div class="hidden sm:block">
+                <span class="tooltip-text">GitHub</span>
+              </div>
+            </a> -->
+              <a
+                @click="isShowingInfoModal = true"
+                href="javascript:void(0)"
+                class="tooltip rounded-full hidden sm:block"
               >
                 <div class="bg-gray-100 hover:bg-gray-200 p-2 rounded-full">
                   <svg
                     class="w-6 h-6"
-                    role="img"
-                    viewBox="0 0 24 24"
                     xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="1.5"
+                    stroke="currentColor"
                   >
                     <path
-                      d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"
                     />
                   </svg>
                 </div>
                 <div class="hidden sm:block">
-                  <span class="tooltip-text">GitHub</span>
+                  <span class="tooltip-text">About</span>
                 </div>
-              </a> -->
+              </a>
               <a
                 @click="isShowingMobileSearch = true"
                 href="javascript:void(0)"
@@ -399,6 +454,259 @@
           <!-- map -->
           <div id="map" style="width: 100%; height: 100%"></div>
         </div>
+      </div>
+
+      <!-- info modal -->
+      <div class="relative z-sidebar">
+        <!-- overlay -->
+        <transition
+          enter-active-class="transition-opacity duration-300 ease-linear"
+          enter-from-class="opacity-0"
+          enter-to-class="opacity-100"
+          leave-active-class="transition-opacity duration-300 ease-linear"
+          leave-from-class="opacity-100"
+          leave-to-class="opacity-0"
+        >
+          <div
+            v-show="isShowingInfoModal"
+            @click="dismissInfoModal"
+            class="fixed inset-0 bg-gray-900 bg-opacity-75"
+          ></div>
+        </transition>
+
+        <!-- modal -->
+        <transition
+          enter-active-class="transition duration-300 ease-in-out transform"
+          enter-from-class="translate-y-full"
+          enter-to-class="translate-y-0"
+          leave-active-class="transition duration-300 ease-in-out transform"
+          leave-from-class="translate-y-0"
+          leave-to-class="translate-y-full"
+        >
+          <div
+            @click="dismissInfoModal"
+            v-show="isShowingInfoModal"
+            class="fixed left-0 right-0 top-0 bottom-0 lg:pointer-events-none"
+          >
+            <div class="flex w-full h-full overflow-y-auto p-4">
+              <div
+                @click.stop
+                class="mx-auto my-auto w-full max-w-2xl flex-col bg-white shadow-xl rounded-xl p-2 lg:pointer-events-auto"
+              >
+                <div class="relative flex">
+                  <!-- close button -->
+                  <div class="absolute top-0 right-0">
+                    <div class="h-7">
+                      <a
+                        href="javascript:void(0)"
+                        class="rounded-full"
+                        @click="dismissInfoModal"
+                      >
+                        <div
+                          class="bg-gray-100 hover:bg-gray-200 p-2 rounded-full"
+                        >
+                          <svg
+                            class="w-6 h-6"
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 24 24"
+                            stroke-width="1.5"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path
+                              stroke="none"
+                              d="M0 0h24v24H0z"
+                              fill="none"
+                            ></path>
+                            <path d="M18 6l-12 12"></path>
+                            <path d="M6 6l12 12"></path>
+                          </svg>
+                        </div>
+                      </a>
+                    </div>
+                  </div>
+
+                  <!-- content -->
+                  <div class="flex flex-col w-full py-2 space-y-2">
+                    <!-- app info -->
+                    <div class="w-full mx-auto text-center">
+                      <img
+                        src="./icon.png"
+                        class="mx-auto w-16 h-16 rounded mb-1"
+                      />
+                      <h1 class="font-bold">Meshtastic Map</h1>
+                      <h2>
+                        Forked from
+                        <a
+                          class="link"
+                          target="_blank"
+                          href="https://liamcottle.com"
+                          >Liam Cottle</a
+                        >
+                      </h2>
+                    </div>
+
+                    <!-- welcome -->
+                    <div
+                      class="bg-green-100 rounded p-2 border border-green-200"
+                    >
+                      👋 Welcome to my open source map of Meshtastic nodes heard
+                      on the public MQTT server.
+                    </div>
+
+                    <!-- features -->
+                    <div>
+                      <div class="font-bold mb-2">Features</div>
+                      <div
+                        class="bg-gray-100 rounded p-2 border border-gray-200"
+                      >
+                        <ul class="list-disc list-inside">
+                          <li>
+                            The map shows nodes that have sent a valid position
+                            to MQTT.
+                          </li>
+                          <li>
+                            Position packets must be unencrypted, or encrypted
+                            with the default key.
+                          </li>
+                          <li>
+                            Use the search bar to find nodes by ID or name.
+                          </li>
+                          <li>
+                            Hover over nodes (on desktop) to see basic details.
+                          </li>
+                          <li>
+                            Click a node to see info such as telemetry graphs
+                            and traceroutes.
+                          </li>
+                          <li>
+                            Use the top right layers panel to show neighbours
+                            and waypoints.
+                          </li>
+                          <li>
+                            Use the settings button to configure the map to your
+                            liking.
+                          </li>
+                          <li>
+                            Have a feature request, or found a bug?
+                            <a
+                              class="link"
+                              target="_blank"
+                              href="https://github.com/bbbenji/meshmap-map"
+                              >Open an issue</a
+                            >
+                            on GitHub.
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <!-- faq -->
+                    <div>
+                      <div class="font-bold mb-2">FAQ</div>
+                      <div class="space-y-2">
+                        <div
+                          class="bg-gray-100 rounded p-2 border border-gray-200"
+                        >
+                          <div class="font-semibold">
+                            How do I add my node to the map?
+                          </div>
+                          <div>
+                            Your node, or a node that hears your node must
+                            uplink to MQTT.
+                          </div>
+                          <div>
+                            Your position packet must be unencrypted, or
+                            encrypted with the default key.
+                          </div>
+                        </div>
+                        <div
+                          class="bg-gray-100 rounded p-2 border border-gray-200"
+                        >
+                          <div class="font-semibold">
+                            How do I remove my node from the map?
+                          </div>
+                          <div>
+                            Nodes that have not been heard for 7 days are
+                            automatically removed.
+                          </div>
+                          <div>
+                            Disable position reporting in your node to prevent
+                            it coming back.
+                          </div>
+                          <div>
+                            Use custom encryption keys so the public can't see
+                            your position data.
+                          </div>
+                        </div>
+                        <div
+                          class="bg-gray-100 rounded p-2 border border-gray-200"
+                        >
+                          <div class="font-semibold">
+                            How do I see neighbours a node heard?
+                          </div>
+                          <div>
+                            Open the top right layers panel and enable
+                            neighbours.
+                          </div>
+                          <div>
+                            Some neighbours are from MQTT, this is patched in
+                            latest firmware.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- legal -->
+                    <div>
+                      <div class="font-bold mb-2">Legal</div>
+                      <div
+                        class="bg-gray-100 rounded p-2 border border-gray-200"
+                      >
+                        <div>
+                          This project is not affiliated with or endorsed by the
+                          <a
+                            class="link"
+                            target="_blank"
+                            href="https://meshtastic.org"
+                            >Meshtastic</a
+                          >
+                          project.
+                        </div>
+                        <div>
+                          The Meshtastic logo is the trademark of Meshtastic
+                          LLC.
+                        </div>
+                        <div>
+                          Map tiles provided by
+                          <a
+                            class="link"
+                            target="_blank"
+                            href="https://www.openstreetmap.org/copyright"
+                            >OpenStreetMap</a
+                          >
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- dismiss button -->
+                    <div class="mx-auto">
+                      <a href="javascript:void(0)" @click="dismissInfoModal">
+                        <div
+                          class="bg-gray-200 hover:bg-gray-300 px-6 py-2 rounded-md shadow"
+                        >
+                          Dismiss
+                        </div>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </transition>
       </div>
 
       <!-- hardware models sidebar -->
@@ -687,6 +995,214 @@
                                 </p>
                                 <p class="truncate text-sm text-gray-700">
                                   {{ selectedNode.hardware_model_name }}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Firmware
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.firmware_version"
+                                    >{{ selectedNode.firmware_version }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <!-- lora config -->
+                  <div>
+                    <div class="bg-gray-200 p-2 font-semibold">LoRa Config</div>
+                    <ul role="list" class="flex-1 divide-y divide-gray-200">
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Region
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.region_name"
+                                    >{{ selectedNode.region_name }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Frequency
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.region_name"
+                                    >{{
+                                    getRegionFrequencyRange(selectedNode.region_name)
+                                    }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Modem Preset
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.modem_preset_name"
+                                    >{{ selectedNode.modem_preset_name }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Has Default Channel
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span
+                                    v-if="selectedNode.has_default_channel != null"
+                                    >{{ selectedNode.has_default_channel ? "Yes"
+                                    : "No" }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <!-- position -->
+                  <div>
+                    <div class="bg-gray-200 p-2 font-semibold">Position</div>
+                    <ul role="list" class="flex-1 divide-y divide-gray-200">
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Latitude
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.latitude"
+                                    >{{ selectedNode.latitude }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Longitude
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.longitude"
+                                    >{{ selectedNode.longitude }}</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        <div class="relative flex items-center">
+                          <div class="block flex-1 px-4 py-2">
+                            <div
+                              class="relative flex min-w-0 flex-1 items-center"
+                            >
+                              <div class="truncate">
+                                <p
+                                  class="truncate text-sm font-medium text-gray-900"
+                                >
+                                  Altitude
+                                </p>
+                                <p class="truncate text-sm text-gray-700">
+                                  <span v-if="selectedNode.altitude"
+                                    >{{ selectedNode.altitude }}m</span
+                                  >
+                                  <span v-else class="text-gray-500">???</span>
                                 </p>
                               </div>
                             </div>
@@ -1087,8 +1603,19 @@
                   </div>
 
                   <!-- share -->
-                  <div class="hidden">
-                    <div class="bg-gray-200 p-2 font-semibold">Share Link</div>
+                  <div>
+                    <div class="flex bg-gray-200 p-2 font-semibold">
+                      <div class="my-auto">Share Link</div>
+                      <div class="ml-auto">
+                        <button
+                          @click="copyShareLinkForNode(selectedNode.node_id)"
+                          type="button"
+                          class="rounded bg-white px-2 py-1 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
                     <ul role="list" class="flex-1 divide-y divide-gray-200">
                       <li>
                         <div class="relative flex items-center">
@@ -1098,7 +1625,7 @@
                                 type="text"
                                 readonly
                                 class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
-                                :value="`https://map.meshmap.pl/?node_id=${selectedNode.node_id}`"
+                                :value="getShareLinkForNode(selectedNode.node_id)"
                               />
                             </div>
                           </div>
@@ -1305,6 +1832,15 @@
                       </li>
                     </ul>
                   </div>
+
+                  <div>
+                    <div class="bg-gray-200 p-2 font-semibold">Raw Data</div>
+                    <div class="text-sm text-gray-700">
+                      <pre class="bg-gray-100 rounded p-2 overflow-x-auto">
+{{ JSON.stringify(selectedTraceRoute, null, 4) }}</pre
+                      >
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1418,6 +1954,68 @@
                     </select>
                   </div>
 
+                  <!-- configNodesOfflineAgeInSeconds -->
+                  <div class="p-2">
+                    <label class="block text-sm font-medium text-gray-900"
+                      >Nodes Offline Age</label
+                    >
+                    <div class="text-xs text-gray-600 mb-2">
+                      Nodes not updated within this time will show as red icons.
+                      Reload to update map.
+                    </div>
+                    <select
+                      v-model="configNodesOfflineAgeInSeconds"
+                      class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+                    >
+                      <option :value="null">Don't show as offline</option>
+                      <option value="900">15 minutes</option>
+                      <option value="1800">30 minutes</option>
+                      <option value="2700">45 minutes</option>
+                      <option value="3600">1 hour</option>
+                      <option value="7200">2 hours</option>
+                      <option value="10800">3 hours</option>
+                      <option value="21600">6 hours</option>
+                      <option value="43200">12 hours</option>
+                      <option value="86400">24 hours</option>
+                      <option value="172800">2 days</option>
+                      <option value="259200">3 days</option>
+                      <option value="345600">4 days</option>
+                      <option value="432000">5 days</option>
+                      <option value="518400">6 days</option>
+                      <option value="604800">7 days</option>
+                    </select>
+                  </div>
+
+                  <!-- configWaypointsMaxAgeInSeconds -->
+                  <div class="p-2">
+                    <label class="block text-sm font-medium text-gray-900"
+                      >Waypoints Max Age</label
+                    >
+                    <div class="text-xs text-gray-600 mb-2">
+                      Waypoints not updated within this time are hidden. Reload
+                      to update map.
+                    </div>
+                    <select
+                      v-model="configWaypointsMaxAgeInSeconds"
+                      class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+                    >
+                      <option :value="null">Show All</option>
+                      <option value="900">15 minutes</option>
+                      <option value="1800">30 minutes</option>
+                      <option value="3600">1 hour</option>
+                      <option value="10800">3 hours</option>
+                      <option value="21600">6 hours</option>
+                      <option value="43200">12 hours</option>
+                      <option value="86400">24 hours</option>
+                      <option value="172800">2 days</option>
+                      <option value="259200">3 days</option>
+                      <option value="345600">4 days</option>
+                      <option value="432000">5 days</option>
+                      <option value="518400">6 days</option>
+                      <option value="604800">7 days</option>
+                    </select>
+                  </div>
+
                   <!-- configNeighboursMaxDistanceInMeters -->
                   <div class="p-2">
                     <label class="block text-sm font-medium text-gray-900"
@@ -1448,6 +2046,127 @@
                       class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
                     />
                   </div>
+
+                  <!-- configAutoUpdatePositionInUrl -->
+                  <div class="p-2">
+                    <div class="flex items-start">
+                      <div class="flex items-center h-5">
+                        <input
+                          type="checkbox"
+                          v-model="configAutoUpdatePositionInUrl"
+                          class="w-4 h-4 border border-gray-300 rounded bg-gray-50 focus:ring-3 focus:ring-blue-300"
+                          required
+                        />
+                      </div>
+                      <label class="ml-2 text-sm font-medium text-gray-900"
+                        >Auto Update Position in URL</label
+                      >
+                    </div>
+                    <div class="text-xs text-gray-600">
+                      Sets lat/lng/zoom as query parameters.
+                    </div>
+                  </div>
+
+                  <!-- configEnableMapAnimations -->
+                  <div class="p-2">
+                    <div class="flex items-start">
+                      <div class="flex items-center h-5">
+                        <input
+                          type="checkbox"
+                          v-model="configEnableMapAnimations"
+                          class="w-4 h-4 border border-gray-300 rounded bg-gray-50 focus:ring-3 focus:ring-blue-300"
+                          required
+                        />
+                      </div>
+                      <label class="ml-2 text-sm font-medium text-gray-900"
+                        >Enable Map Animations</label
+                      >
+                    </div>
+                    <div class="text-xs text-gray-600">
+                      Map will animate flying to nodes.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </div>
+
+      <!-- node neighbours modal -->
+      <div class="relative z-sidebar" role="dialog" aria-modal="true">
+        <!-- sidebar -->
+        <transition
+          enter-active-class="transition duration-300 ease-in-out transform"
+          enter-from-class="translate-y-full"
+          enter-to-class="translate-y-0"
+          leave-active-class="transition duration-300 ease-in-out transform"
+          leave-from-class="translate-y-0"
+          leave-to-class="translate-y-full"
+        >
+          <div
+            v-show="selectedNodeToShowNeighbours != null"
+            class="fixed left-0 right-0 bottom-0"
+          >
+            <div
+              v-if="selectedNodeToShowNeighbours != null"
+              class="mx-auto w-screen max-w-md p-4"
+            >
+              <div
+                class="flex h-full flex-col bg-white shadow-xl rounded-xl border"
+              >
+                <div class="p-2">
+                  <div class="flex items-start justify-between">
+                    <div>
+                      <h2 class="font-bold">
+                        {{ selectedNodeToShowNeighbours.short_name }} Neighbours
+                      </h2>
+                      <h3
+                        v-if="selectedNodeToShowNeighboursType === 'we_heard'"
+                        class="text-sm"
+                      >
+                        Nodes heard by {{
+                        selectedNodeToShowNeighbours.short_name }}
+                      </h3>
+                      <h3
+                        v-if="selectedNodeToShowNeighboursType === 'heard_us'"
+                        class="text-sm"
+                      >
+                        Nodes that heard {{
+                        selectedNodeToShowNeighbours.short_name }}
+                      </h3>
+                    </div>
+                    <div class="my-auto ml-3 flex h-7 items-center">
+                      <a
+                        href="javascript:void(0)"
+                        class="rounded-full"
+                        @click="dismissShowingNodeNeighbours"
+                      >
+                        <div
+                          class="bg-gray-100 hover:bg-gray-200 p-2 rounded-full"
+                        >
+                          <svg
+                            class="w-6 h-6"
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 24 24"
+                            stroke-width="1.5"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path
+                              stroke="none"
+                              d="M0 0h24v24H0z"
+                              fill="none"
+                            ></path>
+                            <path d="M18 6l-12 12"></path>
+                            <path d="M6 6l12 12"></path>
+                          </svg>
+                        </div>
+                      </a>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1457,6 +2176,63 @@
     </div>
 
     <script>
+      function getConfigHasSeenInfoModal() {
+        return localStorage.getItem("config_has_seen_info_modal") === "true";
+      }
+
+      function setConfigHasSeenInfoModal(value) {
+        return localStorage.setItem("config_has_seen_info_modal", value);
+      }
+
+      function getConfigAutoUpdatePositionInUrl() {
+        return (
+          localStorage.getItem("config_auto_update_position_in_url") === "true"
+        );
+      }
+
+      function setConfigAutoUpdatePositionInUrl(value) {
+        return localStorage.setItem(
+          "config_auto_update_position_in_url",
+          value
+        );
+      }
+
+      function getConfigEnableMapAnimations() {
+        const value = localStorage.getItem("config_enable_map_animations");
+
+        // enable animations by default
+        if (value === null) {
+          return true;
+        }
+
+        return value === "true";
+      }
+
+      function setConfigEnableMapAnimations(value) {
+        return localStorage.setItem("config_enable_map_animations", value);
+      }
+
+      function getConfigMapEnabledOverlayLayers() {
+        try {
+          const value = localStorage.getItem(
+            "config_map_enabled_overlay_layers"
+          );
+          if (value) {
+            return JSON.parse(value);
+          }
+        } catch (e) {}
+
+        // overlays enabled by default
+        return ["Legend"];
+      }
+
+      function setConfigMapEnabledOverlayLayers(layers) {
+        return localStorage.setItem(
+          "config_map_enabled_overlay_layers",
+          JSON.stringify(layers)
+        );
+      }
+
       function getConfigNodesMaxAgeInSeconds() {
         const value = localStorage.getItem("config_nodes_max_age_in_seconds");
         return value != null ? parseInt(value) : null;
@@ -1467,6 +2243,42 @@
           return localStorage.setItem("config_nodes_max_age_in_seconds", value);
         } else {
           return localStorage.removeItem("config_nodes_max_age_in_seconds");
+        }
+      }
+
+      function getConfigNodesOfflineAgeInSeconds() {
+        const value = localStorage.getItem(
+          "config_nodes_offline_age_in_seconds"
+        );
+        return value != null ? parseInt(value) : null;
+      }
+
+      function setConfigNodesOfflineAgeInSeconds(value) {
+        if (value != null) {
+          return localStorage.setItem(
+            "config_nodes_offline_age_in_seconds",
+            value
+          );
+        } else {
+          return localStorage.removeItem("config_nodes_offline_age_in_seconds");
+        }
+      }
+
+      function getConfigWaypointsMaxAgeInSeconds() {
+        const value = localStorage.getItem(
+          "config_waypoints_max_age_in_seconds"
+        );
+        return value != null ? parseInt(value) : null;
+      }
+
+      function setConfigWaypointsMaxAgeInSeconds(value) {
+        if (value != null) {
+          return localStorage.setItem(
+            "config_waypoints_max_age_in_seconds",
+            value
+          );
+        } else {
+          return localStorage.removeItem("config_waypoints_max_age_in_seconds");
         }
       }
 
@@ -1487,11 +2299,17 @@
       function getConfigZoomLevelGoToNode() {
         const value = localStorage.getItem("config_zoom_level_go_to_node");
         const parsedValue = value != null ? parseInt(value) : null;
-        return parsedValue || 10;
+        return parsedValue || 15;
       }
 
       function setConfigZoomLevelGoToNode(value) {
         return localStorage.setItem("config_zoom_level_go_to_node", value);
+      }
+
+      function isMobile() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+          navigator.userAgent
+        );
       }
     </script>
 
@@ -1500,13 +2318,21 @@
         data() {
           return {
             configNodesMaxAgeInSeconds: window.getConfigNodesMaxAgeInSeconds(),
+            configNodesOfflineAgeInSeconds:
+              window.getConfigNodesOfflineAgeInSeconds(),
+            configWaypointsMaxAgeInSeconds:
+              window.getConfigWaypointsMaxAgeInSeconds(),
             configNeighboursMaxDistanceInMeters:
               window.getConfigNeighboursMaxDistanceInMeters(),
             configZoomLevelGoToNode: window.getConfigZoomLevelGoToNode(),
+            configAutoUpdatePositionInUrl:
+              window.getConfigAutoUpdatePositionInUrl(),
+            configEnableMapAnimations: window.getConfigEnableMapAnimations(),
 
             isShowingHardwareModels: false,
             hardwareModelStats: null,
 
+            isShowingInfoModal: this.shouldShowInfoModal(),
             isShowingMobileSearch: false,
             isShowingSettings: false,
 
@@ -1519,6 +2345,9 @@
             selectedNodeTraceroutes: [],
 
             selectedTraceRoute: null,
+
+            selectedNodeToShowNeighbours: null,
+            selectedNodeToShowNeighboursType: null,
 
             moment: window.moment,
           };
@@ -1541,12 +2370,27 @@
             this.loadNodeTraceroutes(node.node_id);
           };
 
+          // handle node callback from outside of vue
+          window._onShowNodeNeighboursWeHeardClick = (node) => {
+            this.selectedNodeToShowNeighbours = node;
+            this.selectedNodeToShowNeighboursType = "we_heard";
+          };
+
+          // handle node callback from outside of vue
+          window._onShowNodeNeighboursHeardUsClick = (node) => {
+            this.selectedNodeToShowNeighbours = node;
+            this.selectedNodeToShowNeighboursType = "heard_us";
+          };
+
           // handle nodes updated callback from outside of vue
           window._onNodesUpdated = (nodes) => {
             this.nodes = nodes;
           };
         },
         methods: {
+          shouldShowInfoModal: function () {
+            return !window.getConfigHasSeenInfoModal() && !window.isMobile();
+          },
           loadHardwareModelStats: function () {
             window.axios
               .get("/api/v1/stats/hardware-models")
@@ -1890,6 +2734,36 @@
             // go to node
             window.goToNode(node.node_id);
           },
+          dismissInfoModal: function () {
+            this.isShowingInfoModal = false;
+            window.setConfigHasSeenInfoModal(true);
+          },
+          getRegionFrequencyRange: function (regionName) {
+            return window.getRegionFrequencyRange(regionName);
+          },
+          getShareLinkForNode: function (nodeId) {
+            return window.location.origin + `/?node_id=${nodeId}`;
+          },
+          copyShareLinkForNode: function (nodeId) {
+            // make sure copy to clipboard is supported
+            if (!navigator.clipboard || !navigator.clipboard.writeText) {
+              alert(
+                "Clipboard not supported. Site must be served via https on iOS."
+              );
+              return;
+            }
+
+            // copy share link to clipboard
+            const url = this.getShareLinkForNode(nodeId);
+            navigator.clipboard.writeText(url);
+
+            // tell use we copied it
+            alert("Copied to clipboard!");
+          },
+          dismissShowingNodeNeighbours: function () {
+            window._onHideNodeNeighboursClick();
+            this.selectedNodeToShowNeighbours = null;
+          },
         },
         computed: {
           searchedNodes() {
@@ -1928,6 +2802,16 @@
               this.configNodesMaxAgeInSeconds
             );
           },
+          configNodesOfflineAgeInSeconds() {
+            window.setConfigNodesOfflineAgeInSeconds(
+              this.configNodesOfflineAgeInSeconds
+            );
+          },
+          configWaypointsMaxAgeInSeconds() {
+            window.setConfigWaypointsMaxAgeInSeconds(
+              this.configWaypointsMaxAgeInSeconds
+            );
+          },
           configNeighboursMaxDistanceInMeters() {
             window.setConfigNeighboursMaxDistanceInMeters(
               this.configNeighboursMaxDistanceInMeters
@@ -1935,6 +2819,14 @@
           },
           configZoomLevelGoToNode() {
             window.setConfigZoomLevelGoToNode(this.configZoomLevelGoToNode);
+          },
+          configAutoUpdatePositionInUrl() {
+            window.setConfigAutoUpdatePositionInUrl(
+              this.configAutoUpdatePositionInUrl
+            );
+          },
+          configEnableMapAnimations() {
+            window.setConfigEnableMapAnimations(this.configEnableMapAnimations);
           },
         },
       }).mount("#app");
@@ -1974,6 +2866,7 @@
       // create layer groups
       var nodesLayerGroup = new L.LayerGroup();
       var neighboursLayerGroup = new L.LayerGroup();
+      var nodeNeighboursLayerGroup = new L.LayerGroup();
       var nodesClusteredLayerGroup = L.markerClusterGroup({
         showCoverageOnHover: false,
         disableClusteringAtZoom: 10, // zoom level where goToNode zooms to
@@ -1981,20 +2874,33 @@
       var waypointsLayerGroup = new L.LayerGroup();
 
       // create icons
-      var iconOnline = L.divIcon({
-        className: "icon-online",
+      var iconMqttConnected = L.divIcon({
+        className: "icon-mqtt-connected",
+        iconSize: [16, 16], // increase from 12px to 16px to make hover easier
+      });
+
+      var iconMqttDisconnected = L.divIcon({
+        className: "icon-mqtt-disconnected",
+        iconSize: [16, 16], // increase from 12px to 16px to make hover easier
+      });
+
+      var iconOffline = L.divIcon({
+        className: "icon-offline",
         iconSize: [16, 16], // increase from 12px to 16px to make hover easier
       });
 
       // create legend
+      var legendLayerGroup = new L.LayerGroup();
       var legend = L.control({ position: "bottomleft" });
       legend.onAdd = function (map) {
-        var div = L.DomUtil.create("div", "info legend");
+        var div = L.DomUtil.create("div", "leaflet-control-layers");
         div.style.backgroundColor = "white";
         div.style.padding = "12px";
         div.innerHTML =
           `<div style="margin-bottom:6px;"><strong>Legend</strong></div>` +
-          `<div style="display:flex"><div class="icon-online" style="width:12px;height:12px;margin-right:4px;margin-top:auto;margin-bottom:auto;"></div> ONLINE</div>`;
+          `<div style="display:flex"><div class="icon-mqtt-connected" style="width:12px;height:12px;margin-right:4px;margin-top:auto;margin-bottom:auto;"></div> MQTT Connected</div>` +
+          `<div style="display:flex"><div class="icon-mqtt-disconnected" style="width:12px;height:12px;margin-right:4px;margin-top:auto;margin-bottom:auto;"></div> MQTT Disconnected</div>` +
+          `<div style="display:flex"><div class="icon-offline" style="width:12px;height:12px;margin-right:4px;margin-top:auto;margin-bottom:auto;"></div> Offline Too Long</div>`;
         return div;
       };
 
@@ -2005,18 +2911,60 @@
       };
 
       var overlays = {
+        Legend: legendLayerGroup,
         Neighbours: neighboursLayerGroup,
         Waypoints: waypointsLayerGroup,
       };
 
+      // handle adding/remove legend on map (can't use L.Control as an overlay, so we toggle an empty L.LayerGroup)
+      map.on("overlayadd overlayremove", function (event) {
+        if (event.name === "Legend") {
+          if (event.type === "overlayadd") {
+            map.addControl(legend);
+          } else if (event.type === "overlayremove") {
+            map.removeControl(legend);
+          }
+        }
+      });
+
       // add layers to control ui
       L.control.layers(baseLayers, overlays).addTo(map);
 
-      // add layers to map that should be enabled by default
-      // nodesLayerGroup.addTo(map);
+      // enable base layers
       nodesClusteredLayerGroup.addTo(map);
-      // neighboursLayerGroup.addTo(map);
-      // legend.addTo(map);
+
+      // enable overlay layers based on config
+      const enabledOverlayLayers = getConfigMapEnabledOverlayLayers();
+      if (enabledOverlayLayers.includes("Legend")) {
+        legendLayerGroup.addTo(map);
+      }
+      if (enabledOverlayLayers.includes("Neighbours")) {
+        neighboursLayerGroup.addTo(map);
+      }
+      if (enabledOverlayLayers.includes("Waypoints")) {
+        waypointsLayerGroup.addTo(map);
+      }
+
+      // update config when map overlay is added
+      map.on("overlayadd", function (event) {
+        const layerName = event.name;
+        const enabledOverlayLayers = getConfigMapEnabledOverlayLayers();
+        if (!enabledOverlayLayers.includes(layerName)) {
+          enabledOverlayLayers.push(layerName);
+        }
+        setConfigMapEnabledOverlayLayers(enabledOverlayLayers);
+      });
+
+      // update config when map overlay is removed
+      map.on("overlayremove", function (event) {
+        const layerName = event.name;
+        const enabledOverlayLayers = getConfigMapEnabledOverlayLayers().filter(
+          function (enabledOverlayLayer) {
+            return enabledOverlayLayer !== layerName;
+          }
+        );
+        setConfigMapEnabledOverlayLayers(enabledOverlayLayers);
+      });
 
       // handle map clicks
       map.on("click", function () {
@@ -2027,11 +2975,17 @@
         window._onMapClick();
       });
 
-      function isMobile() {
-        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-          navigator.userAgent
-        );
-      }
+      // close all tooltips and popups when clicking map
+      map.on("click", function (event) {
+        // do nothing when clicking inside tooltip
+        const clickedElement = event.originalEvent.target;
+        if (elementOrAnyAncestorHasClass(clickedElement, "leaflet-tooltip")) {
+          return;
+        }
+
+        closeAllTooltips();
+        closeAllPopups();
+      });
 
       function isValidLatLng(lat, lng) {
         if (isNaN(lat) || isNaN(lng)) {
@@ -2063,7 +3017,7 @@
         return null;
       }
 
-      function goToNode(id) {
+      function goToNode(id, animate, zoom) {
         // find node
         var node = findNodeById(id);
         if (!node) {
@@ -2086,12 +3040,24 @@
         showNodeOutline(id);
 
         // fly to node marker
-        map.flyTo(nodeMarker.getLatLng(), getConfigZoomLevelGoToNode(), {
-          animate: true,
-        });
+        const shouldAnimate = animate != null ? animate : true;
+        map.flyTo(
+          nodeMarker.getLatLng(),
+          zoom || getConfigZoomLevelGoToNode(),
+          {
+            animate: getConfigEnableMapAnimations() ? shouldAnimate : false,
+          }
+        );
 
         // open tooltip for node
-        map.openTooltip(getTooltipContentForNode(node), nodeMarker.getLatLng());
+        map.openTooltip(
+          getTooltipContentForNode(node),
+          nodeMarker.getLatLng(),
+          {
+            interactive: true, // allow clicking buttons inside tooltip
+            permanent: true, // don't auto dismiss when clicking buttons inside tooltip
+          }
+        );
       }
 
       function goToRandomNode() {
@@ -2155,6 +3121,284 @@
         }).addTo(map);
       }
 
+      function showNodeDetails(id) {
+        // find node
+        const node = findNodeById(id);
+        if (!node) {
+          return;
+        }
+
+        // fire callback to vuejs handler
+        window._onNodeClick(node);
+      }
+
+      function getColourForSnr(snr) {
+        if (snr >= 0) return "#16a34a"; // good
+        if (snr < 0) return "#dc2626"; // bad
+      }
+
+      function cleanUpNodeNeighbours() {
+        // close tooltips and popups
+        closeAllPopups();
+        closeAllTooltips();
+
+        // turn off neighbours layer
+        neighboursLayerGroup.removeFrom(map);
+
+        // setup node neighbours layer
+        nodeNeighboursLayerGroup.clearLayers();
+        nodeNeighboursLayerGroup.removeFrom(map);
+        nodeNeighboursLayerGroup.addTo(map);
+      }
+
+      function showNodeNeighboursThatWeHeard(id) {
+        cleanUpNodeNeighbours();
+
+        // find node
+        const node = findNodeById(id);
+        if (!node) {
+          return;
+        }
+
+        // find node marker
+        const nodeMarker = findNodeMarkerById(node.node_id);
+        if (!nodeMarker) {
+          return;
+        }
+
+        // show overlay for node neighbours
+        window._onShowNodeNeighboursWeHeardClick(node);
+
+        // ensure we have neighbours to show
+        const neighbours = node.neighbours ?? [];
+        if (neighbours.length === 0) {
+          return;
+        }
+
+        // add node neighbours
+        for (const neighbour of neighbours) {
+          // fixme: skipping zero snr? saw some crazy long neighbours with zero snr...
+          if (neighbour.snr === 0) {
+            continue;
+          }
+
+          // find neighbour node
+          const neighbourNode = findNodeById(neighbour.node_id);
+          if (!neighbourNode) {
+            continue;
+          }
+
+          // find neighbour node marker
+          const neighbourNodeMarker = findNodeMarkerById(neighbour.node_id);
+          if (!neighbourNodeMarker) {
+            continue;
+          }
+
+          // calculate distance in meters between nodes (rounded to 2 decimal places)
+          const distanceInMeters = nodeMarker
+            .getLatLng()
+            .distanceTo(neighbourNodeMarker.getLatLng())
+            .toFixed(2);
+
+          // don't show this neighbour connection if further than config allows
+          const configNeighboursMaxDistanceInMeters =
+            getConfigNeighboursMaxDistanceInMeters();
+          if (
+            configNeighboursMaxDistanceInMeters != null &&
+            parseFloat(distanceInMeters) > configNeighboursMaxDistanceInMeters
+          ) {
+            continue;
+          }
+
+          // add neighbour line to map
+          const line = L.polyline(
+            [
+              neighbourNodeMarker.getLatLng(), // from neighbour
+              nodeMarker.getLatLng(), // to us
+            ],
+            {
+              color: getColourForSnr(neighbour.snr),
+              opacity: 1,
+            }
+          )
+            .arrowheads({
+              size: "10px",
+              fill: true,
+              offsets: {
+                start: "25px",
+                end: "25px",
+              },
+            })
+            .addTo(nodeNeighboursLayerGroup);
+
+          // default to showing distance in meters
+          var distance = `${distanceInMeters} meters`;
+
+          // scale to distance in kms
+          if (distanceInMeters >= 1000) {
+            const distanceInKilometers = (distanceInMeters / 1000).toFixed(2);
+            distance = `${distanceInKilometers} kilometers`;
+          }
+
+          const tooltip =
+            `<b>${escapeString(node.short_name)}</b> heard <b>${escapeString(
+              neighbourNode.short_name
+            )}</b>` +
+            `<br/>SNR: ${neighbour.snr}dB` +
+            `<br/>Distance: ${distance}` +
+            `<br/><br/>ID: ${node.node_id} heard ${neighbourNode.node_id}` +
+            `<br/>Hex ID: ${node.node_id_hex} heard ${neighbourNode.node_id_hex}` +
+            (node.neighbours_updated_at
+              ? `<br/>Updated: ${moment(
+                  new Date(node.neighbours_updated_at)
+                ).fromNow()}`
+              : "");
+
+          line
+            .bindTooltip(tooltip, {
+              sticky: true,
+              opacity: 1,
+              interactive: true,
+            })
+            .bindPopup(tooltip)
+            .on("click", function (event) {
+              // close tooltip on click to prevent tooltip and popup showing at same time
+              event.target.closeTooltip();
+            });
+        }
+      }
+
+      function showNodeNeighboursThatHeardUs(id) {
+        cleanUpNodeNeighbours();
+
+        // find node
+        const node = findNodeById(id);
+        if (!node) {
+          return;
+        }
+
+        // find node marker
+        const nodeMarker = findNodeMarkerById(node.node_id);
+        if (!nodeMarker) {
+          return;
+        }
+
+        // show overlay for node neighbours
+        window._onShowNodeNeighboursHeardUsClick(node);
+
+        // find all nodes that have us as a neighbour
+        const neighbourNodeInfos = [];
+        for (const nodeThatMayHaveHeardUs of nodes) {
+          // find our node in this nodes neighbours
+          const nodeNeighbours = nodeThatMayHaveHeardUs.neighbours ?? [];
+          const neighbour = nodeNeighbours.find(function (neighbour) {
+            return neighbour.node_id.toString() === node.node_id.toString();
+          });
+
+          // we exist as a neighbour
+          if (neighbour) {
+            neighbourNodeInfos.push({
+              node: nodeThatMayHaveHeardUs,
+              neighbour: neighbour,
+            });
+          }
+        }
+
+        // ensure we have neighbours to show
+        if (neighbourNodeInfos.length === 0) {
+          return;
+        }
+
+        // add node neighbours
+        for (const neighbourNodeInfo of neighbourNodeInfos) {
+          const neighbourNode = neighbourNodeInfo.node;
+          const neighbour = neighbourNodeInfo.neighbour;
+
+          // fixme: skipping zero snr? saw some crazy long neighbours with zero snr...
+          if (neighbour.snr === 0) {
+            continue;
+          }
+
+          // find neighbour node marker
+          const neighbourNodeMarker = findNodeMarkerById(neighbourNode.node_id);
+          if (!neighbourNodeMarker) {
+            continue;
+          }
+
+          // calculate distance in meters between nodes (rounded to 2 decimal places)
+          const distanceInMeters = neighbourNodeMarker
+            .getLatLng()
+            .distanceTo(nodeMarker.getLatLng())
+            .toFixed(2);
+
+          // don't show this neighbour connection if further than config allows
+          const configNeighboursMaxDistanceInMeters =
+            getConfigNeighboursMaxDistanceInMeters();
+          if (
+            configNeighboursMaxDistanceInMeters != null &&
+            parseFloat(distanceInMeters) > configNeighboursMaxDistanceInMeters
+          ) {
+            continue;
+          }
+
+          // add neighbour line to map
+          const line = L.polyline(
+            [
+              nodeMarker.getLatLng(), // from us
+              neighbourNodeMarker.getLatLng(), // to neighbour
+            ],
+            {
+              color: getColourForSnr(neighbour.snr),
+              opacity: 1,
+            }
+          )
+            .arrowheads({
+              size: "10px",
+              fill: true,
+              offsets: {
+                start: "25px",
+                end: "25px",
+              },
+            })
+            .addTo(nodeNeighboursLayerGroup);
+
+          // default to showing distance in meters
+          var distance = `${distanceInMeters} meters`;
+
+          // scale to distance in kms
+          if (distanceInMeters >= 1000) {
+            const distanceInKilometers = (distanceInMeters / 1000).toFixed(2);
+            distance = `${distanceInKilometers} kilometers`;
+          }
+
+          const tooltip =
+            `<b>${escapeString(
+              neighbourNode.short_name
+            )}</b> heard <b>${escapeString(node.short_name)}</b>` +
+            `<br/>SNR: ${neighbour.snr}dB` +
+            `<br/>Distance: ${distance}` +
+            `<br/><br/>ID: ${neighbourNode.node_id} heard ${node.node_id}` +
+            `<br/>Hex ID: ${neighbourNode.node_id_hex} heard ${node.node_id_hex}` +
+            (neighbourNode.neighbours_updated_at
+              ? `<br/>Updated: ${moment(
+                  new Date(neighbourNode.neighbours_updated_at)
+                ).fromNow()}`
+              : "");
+
+          line
+            .bindTooltip(tooltip, {
+              sticky: true,
+              opacity: 1,
+              interactive: true,
+            })
+            .bindPopup(tooltip)
+            .on("click", function (event) {
+              // close tooltip on click to prevent tooltip and popup showing at same time
+              event.target.closeTooltip();
+            });
+        }
+      }
+
       function clearMap() {
         closeAllPopups();
         closeAllTooltips();
@@ -2162,6 +3406,29 @@
         clearAllNeighbours();
         clearAllWaypoints();
         clearNodeOutline();
+        cleanUpNodeNeighbours();
+      }
+
+      // returns true if the element or one of its parents has the class classname
+      function elementOrAnyAncestorHasClass(element, className) {
+        // check if element contains class
+        if (element.classList && element.classList.contains(className)) {
+          return true;
+        }
+
+        // check if parent node has the class
+        if (element.parentNode) {
+          return elementOrAnyAncestorHasClass(element.parentNode, className);
+        }
+
+        // couldn't find the class
+        return false;
+      }
+
+      // escape strings for tooltips etc, to prevent html/script injection
+      // not used in vuejs, as that auto escapes
+      function escapeString(string) {
+        return string.replace(/</g, "&lt;").replace(/>/g, "&gt;");
       }
 
       function onNodesUpdated(updatedNodes) {
@@ -2196,18 +3463,39 @@
           var hasLocation = isValidLatLng(node.latitude, node.longitude);
 
           if (hasLocation) {
-            // // wrap longitude for shortest path, everything to left of australia should be shown on the right
+            // wrap longitude for shortest path, everything to left of australia should be shown on the right
             // var longitude = parseFloat(node.longitude);
             // if (longitude <= 100) {
-            //   node.longitude = longitude += 360;
+            //   longitude += 360;
             // }
 
-            var icon = iconOnline; // todo status
+            // icon based on mqtt connection state
+            var icon = iconMqttDisconnected;
+            if (node.mqtt_connection_state === "online") {
+              icon = iconMqttConnected;
+            }
+
+            // use offline icon for nodes older than configured node offline age
+            const now = moment();
+            const configNodesOfflineAgeInSeconds =
+              getConfigNodesOfflineAgeInSeconds();
+            if (configNodesOfflineAgeInSeconds) {
+              const lastUpdatedAgeInMillis = now.diff(moment(node.updated_at));
+              if (
+                lastUpdatedAgeInMillis >
+                configNodesOfflineAgeInSeconds * 1000
+              ) {
+                icon = iconOffline;
+              }
+            }
 
             // create node marker
             var marker = L.marker([node.latitude, node.longitude], {
               icon: icon,
               tagName: node.node_id,
+              // we want to show online nodes above offline, but without needing to use separate layer groups
+              zIndexOffset:
+                node.mqtt_connection_state === "online" ? 1000 : -1000,
             }).on("click", function (event) {
               // close tooltip on click to prevent tooltip and popup showing at same time
               event.target.closeTooltip();
@@ -2226,14 +3514,25 @@
 
             // show node info sidebar when clicking node marker
             marker.on("click", function (event) {
+              // close all other popups and tooltips
+              closeAllTooltips();
+              closeAllPopups();
+
               // find node
               const node = findNodeById(event.target.options.tagName);
               if (!node) {
                 return;
               }
 
-              // fire callback to vuejs handler
-              window._onNodeClick(node);
+              // open tooltip for node
+              map.openTooltip(
+                getTooltipContentForNode(node),
+                event.target.getLatLng(),
+                {
+                  interactive: true, // allow clicking buttons inside tooltip
+                  permanent: true, // don't auto dismiss when clicking buttons inside tooltip
+                }
+              );
             });
 
             // add to cache
@@ -2250,6 +3549,7 @@
           }
 
           // add node neighbours
+          var polylineOffset = 0;
           const neighbours = node.neighbours ?? [];
           for (const neighbour of neighbours) {
             // fixme: skipping zero snr? saw some crazy long neighbours with zero snr...
@@ -2285,8 +3585,12 @@
                 {
                   color: "#2563eb",
                   opacity: 0.5,
+                  offset: polylineOffset,
                 }
               ).addTo(neighboursLayerGroup);
+
+              // increase offset so next neighbour does not overlay other neighbours from self
+              polylineOffset += 2;
 
               // default to showing distance in meters
               var distance = `${distanceInMeters} meters`;
@@ -2300,7 +3604,9 @@
               }
 
               const tooltip =
-                `<b>${node.long_name}</b> heard <b>${neighbourNode.long_name}</b>` +
+                `<b>${escapeString(node.long_name)}</b> heard <b>${escapeString(
+                  neighbourNode.long_name
+                )}</b>` +
                 `<br/>SNR: ${neighbour.snr}dB` +
                 `<br/>Distance: ${distance}` +
                 `<br/><br/>ID: ${neighbourNode.node_id} -> ${node.node_id}` +
@@ -2310,7 +3616,7 @@
                       new Date(node.neighbours_updated_at)
                     ).fromNow()}`
                   : "") +
-                `<br/><br/><span class="text-red-500">Note: Some of these super long distance 'Neighbours' don't seem right...</span>`;
+                `<br/><br/><span class="text-red-500">Note: Some neighbour lines are clearly wrong.<br/>Firmware older than <a href="https://github.com/meshtastic/firmware/releases/tag/v2.3.2.63df972">v2.3.2</a> reports MQTT nodes as Neighbours.<br/>Fixed in <a href="https://github.com/meshtastic/firmware/pull/3457">#3457</a></span>`;
 
               line
                 .bindTooltip(tooltip, {
@@ -2336,6 +3642,22 @@
 
         // add nodes
         for (var waypoint of updatedWaypoints) {
+          // skip waypoints older than configured waypoint max age
+          const now = moment();
+          const configWaypointsMaxAgeInSeconds =
+            getConfigWaypointsMaxAgeInSeconds();
+          if (configWaypointsMaxAgeInSeconds) {
+            const lastUpdatedAgeInMillis = now.diff(
+              moment(waypoint.updated_at)
+            );
+            if (
+              lastUpdatedAgeInMillis >
+              configWaypointsMaxAgeInSeconds * 1000
+            ) {
+              continue;
+            }
+          }
+
           // skip expired waypoints
           if (waypoint.expire < Date.now() / 1000) {
             continue;
@@ -2359,7 +3681,7 @@
             // wrap longitude for shortest path, everything to left of australia should be shown on the right
             var longitude = parseFloat(waypoint.longitude);
             if (longitude <= 100) {
-              waypoint.longitude = longitude += 360;
+              longitude += 360;
             }
 
             // determine emoji to show as marker icon
@@ -2369,7 +3691,7 @@
             var tooltip = getTooltipContentForWaypoint(waypoint);
 
             // create waypoint marker
-            var marker = L.marker([waypoint.latitude, waypoint.longitude], {
+            var marker = L.marker([waypoint.latitude, longitude], {
               icon: L.divIcon({
                 className: "waypoint-label",
                 iconSize: [26, 26], // increase from 12px to 26px
@@ -2407,7 +3729,7 @@
         }
       }
 
-      async function reload(goToNodeId) {
+      async function reload(goToNodeId, zoom) {
         // show loading
         setLoading(true);
 
@@ -2425,7 +3747,7 @@
 
           // go to node id if provided
           if (goToNodeId) {
-            goToNode(goToNodeId);
+            goToNode(goToNodeId, false, zoom);
           }
         });
 
@@ -2437,13 +3759,79 @@
         });
       }
 
+      function getRegionFrequencyRange(regionName) {
+        // determine lora frequency range based on region_name
+        // https://github.com/meshtastic/firmware/blob/a4c22321fca6fc8da7bab157c3812055603512ba/src/mesh/RadioInterface.cpp#L21
+        const regionNameToLoraFrequencyRange = {
+          US: "902-928 MHz",
+          EU_433: "433-434 MHz",
+          EU_868: "869.4-869.65 MHz",
+          CN: "470-510 MHz",
+          JP: "920.8-927.8 MHz",
+          ANZ: "915-928 MHz",
+          RU: "868.7-869.2 MHz",
+          KR: "920-923 MHz",
+          TW: "920-925 MHz",
+          IN: "865-867 MHz",
+          NZ_865: "864-868 MHz",
+          TH: "920-925 MHz",
+          UA_433: "433-434.7 MHz",
+          UA_868: "868-868.6 MHz",
+          MY_433: "433-435 MHz",
+          MY_919: "919-924 MHz",
+          SG_923: "917-925 MHz",
+          LORA_24: "2.4-2.4835 GHz",
+          UNSET: "902-928 MHz",
+        };
+
+        return regionNameToLoraFrequencyRange[regionName] ?? null;
+      }
+
       function getTooltipContentForNode(node) {
+        // human friendly connection state
+        var mqttStatus = "";
+        var mqttStatusLastUpdated = node.mqtt_connection_state_updated_at
+          ? `(${moment(
+              new Date(node.mqtt_connection_state_updated_at)
+            ).fromNow()})`
+          : "";
+        if (node.mqtt_connection_state === "online") {
+          mqttStatus = `<span class="text-green-700">Online</span> ${mqttStatusLastUpdated}`;
+        } else if (node.mqtt_connection_state === "offline") {
+          mqttStatus = `<span class="text-blue-700">Offline</span> ${mqttStatusLastUpdated}`;
+        } else {
+          mqttStatus = `<span class="text-blue-700">Offline</span>`;
+        }
+
+        var loraFrequencyRange = getRegionFrequencyRange(node.region_name);
+
         var tooltip =
           `<img class="mb-4 w-40 mx-auto" src="/images/devices/${node.hardware_model_name}.png" onerror="this.classList.add('hidden')"/>` +
-          `<b>${node.long_name}</b>` +
-          `<br/>Short Name: ${node.short_name}` +
+          `<b>${escapeString(node.long_name)}</b>` +
+          `<br/>Short Name: ${escapeString(node.short_name)}` +
+          `<br/>MQTT Status: ${mqttStatus}` +
+          (node.num_online_local_nodes != null
+            ? `<br/>Local Nodes Online: ${node.num_online_local_nodes}`
+            : "") +
           `<br/><br/>Role: ${node.role_name}` +
-          `<br/>Hardware: ${node.hardware_model_name}`;
+          `<br/>Hardware: ${node.hardware_model_name}` +
+          (node.firmware_version != null
+            ? `<br/>Firmware: ${node.firmware_version}`
+            : "") +
+          (node.region_name != null
+            ? `<br/>LoRa Region: ${node.region_name}`
+            : "") +
+          (loraFrequencyRange != null
+            ? `<br/>LoRa Frequency: ${loraFrequencyRange}`
+            : "") +
+          (node.modem_preset_name != null
+            ? `<br/>Modem Preset: ${node.modem_preset_name}`
+            : "") +
+          (node.has_default_channel != null
+            ? `<br/>Has Default Channel: ${
+                node.has_default_channel ? "Yes" : "No"
+              }`
+            : "");
 
         if (node.battery_level) {
           if (node.battery_level > 100) {
@@ -2469,6 +3857,11 @@
           tooltip += `<br/>Air Util: ${Number(node.air_util_tx).toFixed(2)}%`;
         }
 
+        // ignore alt above 42949000 due to https://github.com/meshtastic/firmware/issues/3109
+        if (node.altitude && node.altitude < 42949000) {
+          tooltip += `<br/>Altitude: ${node.altitude}m`;
+        }
+
         // bottom info
         tooltip += `<br/><br/>ID: ${node.node_id}`;
         tooltip += `<br/>Hex ID: ${node.node_id_hex}`;
@@ -2486,6 +3879,11 @@
             ).fromNow()}`
           : "";
 
+        // show details button
+        tooltip += `<br/><br/><button onclick="showNodeDetails(${node.node_id});" class="border border-gray-300 bg-gray-100 p-1 w-full rounded hover:bg-gray-200 mb-1">Show Full Details</button>`;
+        tooltip += `<br/><button onclick="showNodeNeighboursThatHeardUs(${node.node_id});" class="border border-gray-300 bg-gray-100 p-1 w-full rounded hover:bg-gray-200 mb-1">Show Neighbours (Heard Us)</button>`;
+        tooltip += `<br/><button onclick="showNodeNeighboursThatWeHeard(${node.node_id});" class="border border-gray-300 bg-gray-100 p-1 w-full rounded hover:bg-gray-200">Show Neighbours (We Heard)</button>`;
+
         return tooltip;
       }
 
@@ -2494,8 +3892,10 @@
         var fromNode = findNodeById(waypoint.from);
 
         var tooltip =
-          `<b>${waypoint.name}</b>` +
-          (waypoint.description ? `<br/>${waypoint.description}` : "") +
+          `<b>${escapeString(waypoint.name)}</b>` +
+          (waypoint.description
+            ? `<br/>${escapeString(waypoint.description)}`
+            : "") +
           `<br/><br/>Expires: ${moment(
             new Date(waypoint.expire * 1000)
           ).fromNow()}` +
@@ -2507,7 +3907,7 @@
         if (fromNode != null) {
           tooltip += `<br/>From Node: <a href="#" onclick="goToNode(${
             waypoint.from
-          })">${fromNode.long_name || "Unnamed Node"}</a>`;
+          })">${escapeString(fromNode.long_name) || "Unnamed Node"}</a>`;
         } else {
           tooltip += `<br/>From Node: ???`;
         }
@@ -2521,12 +3921,51 @@
         return tooltip;
       }
 
+      window._onHideNodeNeighboursClick = function () {
+        cleanUpNodeNeighbours();
+      };
+
       // parse url params
       var queryParams = new URLSearchParams(location.search);
       var queryNodeId = queryParams.get("node_id");
+      var queryLat = queryParams.get("lat");
+      var queryLng = queryParams.get("lng");
+      var queryZoom = queryParams.get("zoom");
+
+      // go to lat/lng if provided
+      if (queryLat && queryLng) {
+        const zoomLevel = queryZoom || getConfigZoomLevelGoToNode();
+        map.flyTo([queryLat, queryLng], zoomLevel, {
+          animate: false,
+        });
+      }
+
+      // auto update url when lat/lng/zoom changes
+      map.on("moveend zoomend", function () {
+        // check if user enabled auto updating position in url
+        const autoUpdatePositionInUrl = getConfigAutoUpdatePositionInUrl();
+        if (!autoUpdatePositionInUrl) {
+          return;
+        }
+
+        // get map info
+        const latLng = map.getCenter();
+        const zoom = map.getZoom();
+
+        // construct new url
+        const url = new URL(window.location.href);
+        url.searchParams.set("lat", latLng.lat);
+        url.searchParams.set("lng", latLng.lng);
+        url.searchParams.set("zoom", zoom);
+
+        // update current url
+        if (window.history.replaceState) {
+          window.history.replaceState(null, null, url.toString());
+        }
+      });
 
       // reload and go to provided node id
-      reload(queryNodeId);
+      reload(queryNodeId, queryZoom);
     </script>
   </body>
 </html>

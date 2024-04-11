@@ -2,15 +2,127 @@ const crypto = require("crypto");
 const path = require("path");
 const mqtt = require("mqtt");
 const protobufjs = require("protobufjs");
+const commandLineArgs = require("command-line-args");
+const commandLineUsage = require("command-line-usage");
 
 // Initialize Prisma client for database operations
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
+const optionsList = [
+  {
+    name: "help",
+    alias: "h",
+    type: Boolean,
+    description: "Display this usage guide.",
+  },
+  {
+    name: "mqtt-broker-url",
+    type: String,
+    description: "MQTT Broker URL (e.g: mqtt://mqtt.meshtastic.org)",
+  },
+  {
+    name: "mqtt-username",
+    type: String,
+    description: "MQTT Username (e.g: meshdev)",
+  },
+  {
+    name: "mqtt-password",
+    type: String,
+    description: "MQTT Password (e.g: large4cats)",
+  },
+  {
+    name: "collect-service-envelopes",
+    type: Boolean,
+    description:
+      "This option will save all received service envelopes to the database.",
+  },
+  {
+    name: "collect-text-messages",
+    type: Boolean,
+    description:
+      "This option will save all received text messages to the database.",
+  },
+  {
+    name: "collect-waypoints",
+    type: Boolean,
+    description:
+      "This option will save all received waypoints to the database.",
+  },
+  {
+    name: "collect-neighbour-info",
+    type: Boolean,
+    description:
+      "This option will save all received neighbour infos to the database.",
+  },
+  {
+    name: "collect-map-reports",
+    type: Boolean,
+    description:
+      "This option will save all received map reports to the database.",
+  },
+  {
+    name: "decryption-keys",
+    type: String,
+    multiple: true,
+    typeLabel: "<base64DecryptionKey> ...",
+    description:
+      "Decryption keys encoded in base64 to use when decrypting service envelopes.",
+  },
+  {
+    name: "purge-interval-seconds",
+    type: Number,
+    description: "How long to wait between each automatic database purge.",
+  },
+  {
+    name: "purge-nodes-unheard-for-seconds",
+    type: Number,
+    description:
+      "Nodes that haven't been heard from in this many seconds will be purged from the database.",
+  },
+];
+
+// parse command line args
+const options = commandLineArgs(optionsList);
+
+// show help
+if (options.help) {
+  const usage = commandLineUsage([
+    {
+      header: "Meshtastic MQTT Collector",
+      content:
+        "Collects and processes service envelopes from a Meshtastic MQTT server.",
+    },
+    {
+      header: "Options",
+      optionList: optionsList,
+    },
+  ]);
+  console.log(usage);
+  return;
+}
+
+// get options and fallback to default values
+const mqttBrokerUrl =
+  options["mqtt-broker-url"] ?? "mqtt://mqtt.meshtastic.org";
+const mqttUsername = options["mqtt-username"] ?? "meshdev";
+const mqttPassword = options["mqtt-password"] ?? "large4cats";
+const collectServiceEnvelopes = options["collect-service-envelopes"] ?? false;
+const collectTextMessages = options["collect-text-messages"] ?? false;
+const collectWaypoints = options["collect-waypoints"] ?? true;
+const collectNeighbourInfo = options["collect-neighbour-info"] ?? false;
+const collectMapReports = options["collect-map-reports"] ?? false;
+const decryptionKeys = options["decryption-keys"] ?? [
+  "1PG7OiApB1nwvP+rz05pAQ==", // add default "AQ==" decryption key
+];
+const purgeIntervalSeconds = options["purge-interval-seconds"] ?? 10;
+const purgeNodesUnheardForSeconds =
+  options["purge-nodes-unheard-for-seconds"] ?? null;
+
 // Connect to the MQTT broker with specified credentials
-const client = mqtt.connect("mqtt://mqtt.meshtastic.org", {
-  username: "meshdev",
-  password: "large4cats",
+const client = mqtt.connect(mqttBrokerUrl, {
+  username: mqttUsername,
+  password: mqttPassword,
 });
 
 // Set up Protocol Buffers loading mechanism for structured data handling
@@ -28,6 +140,37 @@ const RouteDiscovery = root.lookupType("RouteDiscovery");
 const Telemetry = root.lookupType("Telemetry");
 const User = root.lookupType("User");
 const Waypoint = root.lookupType("Waypoint");
+
+// run automatic purge if configured
+if (purgeIntervalSeconds) {
+  setInterval(async () => {
+    await purgeUnheardNodes();
+  }, purgeIntervalSeconds * 1000);
+}
+
+/**
+ * Purges all nodes from the database that haven't been heard from within the configured timeframe.
+ */
+async function purgeUnheardNodes() {
+  // make sure seconds provided
+  if (!purgeNodesUnheardForSeconds) {
+    return;
+  }
+
+  // delete all nodes that were last updated before configured purge time
+  try {
+    await prisma.node.deleteMany({
+      where: {
+        updated_at: {
+          // last updated before x seconds ago
+          lt: new Date(Date.now() - purgeNodesUnheardForSeconds * 1000),
+        },
+      },
+    });
+  } catch (e) {
+    // do nothing
+  }
+}
 
 // Function to create a unique nonce for packet encryption/decryption
 function createNonce(packetId, fromNode) {
@@ -55,28 +198,31 @@ function createNonce(packetId, fromNode) {
  * - https://github.com/pdxlocations/Meshtastic-MQTT-Connect/blob/main/meshtastic-mqtt-connect.py#L381
  */
 function decrypt(packet) {
-  try {
-    // Default encryption key
-    const key = Buffer.from("1PG7OiApB1nwvP+rz05pAQ==", "base64");
+  // attempt to decrypt with all available decryption keys
+  for (const decryptionKey of decryptionKeys) {
+    try {
+      // convert encryption key to buffer
+      const key = Buffer.from(decryptionKey, "base64");
 
-    // Create decryption iv/nonce for this packet
-    const nonceBuffer = createNonce(packet.id, packet.from);
+      // create decryption iv/nonce for this packet
+      const nonceBuffer = createNonce(packet.id, packet.from);
 
-    // Create aes-128-ctr decipher
-    const decipher = crypto.createDecipheriv("aes-128-ctr", key, nonceBuffer);
+      // create aes-128-ctr decipher
+      const decipher = crypto.createDecipheriv("aes-128-ctr", key, nonceBuffer);
 
-    // Decrypt encrypted packet
-    const decryptedBuffer = Buffer.concat([
-      decipher.update(packet.encrypted),
-      decipher.final(),
-    ]);
+      // decrypt encrypted packet
+      const decryptedBuffer = Buffer.concat([
+        decipher.update(packet.encrypted),
+        decipher.final(),
+      ]);
 
-    // Parse as data message
-    return Data.decode(decryptedBuffer);
-  } catch (e) {
-    // Return null on error to indicate failure
-    return null;
+      // parse as data message
+      return Data.decode(decryptedBuffer);
+    } catch (e) {}
   }
+
+  // couldn't decrypt
+  return null;
 }
 
 // Subscribe to topics when connected
@@ -94,6 +240,33 @@ client.on("connect", function () {
 // Event listener for receiving messages
 client.on("message", async (topic, message) => {
   try {
+    // handle node status
+    if (topic.includes("/stat/!")) {
+      try {
+        // get node id and status
+        const nodeIdHex = topic.split("/").pop();
+        const mqttConnectionState = message.toString();
+
+        // convert node id hex to int value
+        const nodeId = BigInt("0x" + nodeIdHex.replaceAll("!", ""));
+
+        // update mqtt connection state for node
+        await prisma.node.updateMany({
+          where: {
+            node_id: nodeId,
+          },
+          data: {
+            mqtt_connection_state: mqttConnectionState,
+            mqtt_connection_state_updated_at: new Date(),
+          },
+        });
+
+        // no need to continue with this mqtt message
+        return;
+      } catch (e) {
+        console.error(e);
+      }
+    }
     // Decode service envelope
     const envelope = ServiceEnvelope.decode(message);
     if (!envelope.packet) {
@@ -101,7 +274,7 @@ client.on("message", async (topic, message) => {
     }
 
     // Create service envelope in db
-    if (process.env.MM_COLLECT_SERVICE_ENVELOPES === "true") {
+    if (collectServiceEnvelopes) {
       try {
         await prisma.serviceEnvelope.create({
           data: {
@@ -141,6 +314,9 @@ client.on("message", async (topic, message) => {
 
     // Handling different types of packets based on their portnum
     if (portnum === 1) {
+      if (!collectTextMessages) {
+        return;
+      }
       // Handling TEXT_MESSAGE_APP
       if (logKnownPacketTypes) {
         console.log("TEXT_MESSAGE_APP", {
@@ -239,6 +415,9 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
     } else if (portnum === 8) {
+      if (!collectWaypoints) {
+        return;
+      }
       // Handling WAYPOINT_APP
       const waypoint = Waypoint.decode(envelope.packet.decoded.payload);
 
@@ -292,12 +471,15 @@ client.on("message", async (topic, message) => {
       // Similar logic applies to other packet types like TELEMETRY_APP, TRACEROUTE_APP, MAP_REPORT_APP
       // Each with their specific handling based on the packet's payload and purpose
 
-      // Create neighbour info in the database
+      // Update neighbour info in the database
       try {
-        await prisma.neighbourInfo.create({
-          data: {
+        await prisma.node.updateMany({
+          where: {
             node_id: envelope.packet.from,
-            node_broadcast_interval_secs:
+          },
+          data: {
+            neighbours_updated_at: new Date(),
+            neighbour_broadcast_interval_secs:
               neighbourInfo.nodeBroadcastIntervalSecs,
             neighbours: neighbourInfo.neighbors.map((neighbour) => {
               return {
@@ -311,6 +493,11 @@ client.on("message", async (topic, message) => {
         console.error(e);
       }
 
+      // don't store all neighbour infos, but we want to update the existing node above
+      if (!collectNeighbourInfo) {
+        return;
+      }
+
       // Update node neighbour info in the database
       try {
         await prisma.node.updateMany({
@@ -318,8 +505,8 @@ client.on("message", async (topic, message) => {
             node_id: envelope.packet.from,
           },
           data: {
-            neighbours_updated_at: new Date(),
-            neighbour_broadcast_interval_secs:
+            node_id: envelope.packet.from,
+            node_broadcast_interval_secs:
               neighbourInfo.nodeBroadcastIntervalSecs,
             neighbours: neighbourInfo.neighbors.map((neighbour) => {
               return {
@@ -445,12 +632,66 @@ client.on("message", async (topic, message) => {
       // Handling MAP_REPORT_APP
       const mapReport = MapReport.decode(envelope.packet.decoded.payload);
 
+      // congrats! you got blocked for spamming map reports with 0 sec interval. your map reports will be ignored.
+      // fix your settings and update your firmware to automatically get unblocked :)
+      if (
+        (envelope.packet.from === 3774324368 &&
+          mapReport.firmwareVersion === "2.3.0.5f47ca1") || // [3202] T-Beam 3202
+        (envelope.packet.from === 3663859228 &&
+          mapReport.firmwareVersion === "2.3.1.4fa7f5a") || // [chrs] chris
+        (envelope.packet.from === 1153561478 &&
+          mapReport.firmwareVersion === "2.3.1.4fa7f5a") || // [Desc] Descend
+        (envelope.packet.from === 3664091724 &&
+          mapReport.firmwareVersion === "2.3.0.5f47ca1")
+      ) {
+        // [Del1] Delaware_Mesh
+        return;
+      }
+
       // Handling unknown or unimplemented packet types
       if (logKnownPacketTypes) {
         console.log("MAP_REPORT_APP", {
           from: envelope.packet.from.toString(16),
           map_report: mapReport,
         });
+      }
+
+      // create or update node in db
+      try {
+        // data to set on node
+        const data = {
+          long_name: mapReport.longName,
+          short_name: mapReport.shortName,
+          hardware_model: mapReport.hwModel,
+          role: mapReport.role,
+          latitude: mapReport.latitudeI,
+          longitude: mapReport.longitudeI,
+          altitude: mapReport.altitude !== 0 ? mapReport.altitude : null,
+          firmware_version: mapReport.firmwareVersion,
+          region: mapReport.region,
+          modem_preset: mapReport.modemPreset,
+          has_default_channel: mapReport.hasDefaultChannel,
+          position_precision: mapReport.positionPrecision,
+          num_online_local_nodes: mapReport.numOnlineLocalNodes,
+          position_updated_at: new Date(),
+        };
+
+        await prisma.node.upsert({
+          where: {
+            node_id: envelope.packet.from,
+          },
+          create: {
+            node_id: envelope.packet.from,
+            ...data,
+          },
+          update: data,
+        });
+      } catch (e) {
+        console.error(e);
+      }
+
+      if (!collectMapReports) {
+        return;
       }
 
       try {

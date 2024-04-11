@@ -17,15 +17,18 @@ root.resolvePath = (origin, target) => path.join(__dirname, "protos", target);
 root.loadSync("meshtastic/mqtt.proto");
 const HardwareModel = root.lookupEnum("HardwareModel");
 const Role = root.lookupEnum("Config.DeviceConfig.Role");
+const RegionCode = root.lookupEnum("Config.LoRaConfig.RegionCode");
+const ModemPreset = root.lookupEnum("Config.LoRaConfig.ModemPreset");
 
 // appends extra info for node objects returned from api
 function formatNodeInfo(node) {
   return {
     ...node,
     node_id_hex: "!" + node.node_id.toString(16),
-    hardware_model_name:
-      HardwareModel.valuesById[node.hardware_model] ?? "UNKNOWN",
-    role_name: Role.valuesById[node.role] ?? "UNKNOWN",
+    hardware_model_name: HardwareModel.valuesById[node.hardware_model] ?? null,
+    role_name: Role.valuesById[node.role] ?? null,
+    region_name: RegionCode.valuesById[node.region] ?? null,
+    modem_preset_name: ModemPreset.valuesById[node.modem_preset] ?? null,
   };
 }
 
@@ -194,6 +197,63 @@ app.get("/api/v1/nodes/:nodeId/mqtt-metrics", async (req, res) => {
   }
 });
 
+app.get("/api/v1/nodes/:nodeId/neighbours", async (req, res) => {
+  try {
+    const nodeId = parseInt(req.params.nodeId);
+
+    // find node
+    const node = await prisma.node.findFirst({
+      where: {
+        node_id: nodeId,
+      },
+    });
+
+    // make sure node exists
+    if (!node) {
+      res.status(404).json({
+        message: "Not Found",
+      });
+      return;
+    }
+
+    // get nodes from db that have this node as a neighbour
+    const nodesThatHeardUs = await prisma.node.findMany({
+      where: {
+        neighbours: {
+          array_contains: {
+            node_id: Number(nodeId),
+          },
+        },
+      },
+    });
+
+    res.json({
+      nodes_that_we_heard: node.neighbours.map((neighbour) => {
+        return {
+          ...neighbour,
+          updated_at: node.neighbours_updated_at,
+        };
+      }),
+      nodes_that_heard_us: nodesThatHeardUs.map((nodeThatHeardUs) => {
+        const neighbourInfo = nodeThatHeardUs.neighbours.find(
+          (neighbour) =>
+            neighbour.node_id.toString() === node.node_id.toString()
+        );
+        return {
+          node_id: Number(nodeThatHeardUs.node_id),
+          snr: neighbourInfo.snr,
+          updated_at: nodeThatHeardUs.neighbours_updated_at,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Something went wrong, try again later.",
+    });
+  }
+});
+
 app.get("/api/v1/nodes/:nodeId/traceroutes", async (req, res) => {
   try {
     const nodeId = parseInt(req.params.nodeId);
@@ -266,13 +326,8 @@ app.get("/api/v1/stats/hardware-models", async (req, res) => {
 
 app.get("/api/v1/waypoints", async (req, res) => {
   try {
-    // get waypoints from db that have not expired yet
+    // get waypoints from db
     const waypoints = await prisma.waypoint.findMany({
-      where: {
-        expire: {
-          gte: Math.floor(Date.now() / 1000), // now in seconds
-        },
-      },
       orderBy: {
         id: "desc",
       },
@@ -296,8 +351,14 @@ app.get("/api/v1/waypoints", async (req, res) => {
       uniqueWaypoints.push(waypoint);
     }
 
+    // we only want waypoints that haven't expired yet
+    const nonExpiredWayPoints = uniqueWaypoints.filter((waypoint) => {
+      const nowInSeconds = Math.floor(Date.now() / 1000);
+      return waypoint.expire >= nowInSeconds;
+    });
+
     res.json({
-      waypoints: uniqueWaypoints,
+      waypoints: nonExpiredWayPoints,
     });
   } catch (err) {
     res.status(500).json({
